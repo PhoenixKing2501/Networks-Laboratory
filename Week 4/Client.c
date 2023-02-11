@@ -16,7 +16,24 @@
 #define CHUNKSIZE (1<<10)
 
 
-void openapp(char **args) {
+void openapp(char *filename, int len) {
+	char cmd[30];
+
+	if(strcmp(filename + len - 4, ".pdf") == 0) {
+		strcpy(cmd, "acrobat");
+	}
+	else if(strcmp(filename + len - 4, ".jpg") == 0) {
+		strcpy(cmd, "firefox");
+	}
+	else if(strcmp(filename + len - 5, ".html") == 0) {
+		strcpy(cmd, "firefox");
+	}
+	else {
+		strcpy(cmd, "gedit");
+	}
+	
+	char *args[] = {cmd, filename, NULL};
+
 	int pid = fork();
     if(pid == 0) {   // child
         if(execvp(args[0], args) == -1)
@@ -36,17 +53,23 @@ int myparse(char *header, int headerlen) { // returns content-length, and will b
 }
 
 
-int getresponse(int sockfd, char **header) {
+int getresponse(int sockfd, char *filepath, char **header) {
 	int nchars;
 	int hsize = 0;
 	int maxlimit = 256;
 	char buff[CHUNKSIZE];
 	bool header_received = false;
 
+	char *filename = strrchr(filepath, '/');
+	if(filename == NULL) filename = filepath;
+	else filename++;
+
+
 	char *htemp = (char *)malloc((maxlimit+2)*sizeof(char));
 
 	int cnt = 0;
 	int total = 0;
+	int content_len = 0;
 	while(1) {
 		nchars = recv(sockfd, buff, CHUNKSIZE, 0);
 
@@ -72,7 +95,7 @@ int getresponse(int sockfd, char **header) {
 					htemp[hsize++] = '\n';	// put the \n in the header
 					myparse(htemp, hsize); 
 					header_received = true;
-					FILE *fptr = fopen("myexample.html", "w");
+					FILE *fptr = fopen(filename, "w");
 					fprintf(fptr, "%.*s", nchars-k-1, buff+k+1);	// skipping the '\n' in buff[k]
 					total += nchars-k;
 					fclose(fptr);
@@ -81,7 +104,7 @@ int getresponse(int sockfd, char **header) {
 			}
 		}
 		else {
-			FILE *fptr = fopen("myexample.html", "a");
+			FILE *fptr = fopen(filename, "a");
 			fprintf(fptr, "%.*s", nchars, buff);
 			total += nchars;
 			fclose(fptr);
@@ -90,6 +113,9 @@ int getresponse(int sockfd, char **header) {
 	}
 	htemp[hsize] = '\0';
     *header = htemp;
+
+	openapp(filename, strlen(filename));
+
 	return hsize;
 }
 
@@ -176,7 +202,7 @@ void DatePlusDays( struct tm* date, int days )
     // Seconds since start of epoch
     time_t date_seconds = mktime( date ) + (days * ONE_DAY) ;
 
-    *date = *gmtime( &date_seconds ) ; ;
+    *date = *gmtime( &date_seconds ) ;
 }
 
 
@@ -273,6 +299,8 @@ int main() {
 			int headerlen = createheader(ip, path, &header);
 
 			printf("%s", header);
+
+			send_request(header, headerlen, ip, port, NULL);
 			
 		}
 
