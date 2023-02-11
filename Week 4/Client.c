@@ -201,9 +201,15 @@ void givemessage(int sockfd, char *msg, int msgsize) {
 }
 
 void sendfile(int sockfd, char *filename) {
-// 	FILE *fptr = fopen(filename, "r");
-
-// 	fclose(fptr);
+	FILE *fptr = fopen(filename, "rb");
+	char p[CHUNKSIZE + 1] = {0};
+	int bytes = 0;
+	while ((bytes = fread(p, 1, CHUNKSIZE, fptr)) > 0)
+	{
+		send(sockfd, p, bytes, 0);
+		// fwrite(p, 1, bytes, fp2);
+	}
+	fclose(fptr);
 }
 
 /*
@@ -274,37 +280,82 @@ void DatePlusDays( struct tm* date, int days )
 }
 
 
-int createheader(char *ip, char *path, char **header) {
-	char gtime[50];
-	time_t tim;
-	time(&tim);
-	struct tm t = *gmtime(&tim);
-	DatePlusDays(&t, -2);
-	strftime(gtime, 50, "%a, %d %b %Y %H:%M:%S GMT", &t);
+int createheader(char *ip, char *path, char **header, char *sendfilename) {
 
 	char doctype[20];
-	int pathlen = strlen(path);
-	if(strcmp(path + pathlen - 4, ".pdf") == 0) {
-		strcpy(doctype, "application/pdf");
-	}
-	else if(strcmp(path + pathlen - 4, ".jpg") == 0) {
-		strcpy(doctype, "image/jpeg");
-	}
-	else if(strcmp(path + pathlen - 5, ".html") == 0) {
-		strcpy(doctype, "text/html");
-	}
-	else {
-		strcpy(doctype, "text/*");
-	}
-	
 	char htemp[256];
-	sprintf(htemp, "GET %s HTTP/1.1\r\n"
-					"Host: %s\r\n"	
-					"Accept: %s\r\n"
-					"Accept-Language: en-us\r\n"
-					"If-Modified-Since: %s\r\n"
-					"Connection: close\r\n"
-					"\r\n", path, ip, doctype, gtime);
+	
+
+	if(sendfilename == NULL)	// GET
+	{
+		char gtime[50];
+		time_t tim;
+		time(&tim);
+		struct tm t = *gmtime(&tim);
+		DatePlusDays(&t, -2);
+		strftime(gtime, 50, "%a, %d %b %Y %H:%M:%S GMT", &t);
+
+		int pathlen = strlen(path);
+		if(strcmp(path + pathlen - 4, ".pdf") == 0) {
+			strcpy(doctype, "application/pdf");
+		}
+		else if(strcmp(path + pathlen - 4, ".jpg") == 0) {
+			strcpy(doctype, "image/jpeg");
+		}
+		else if(strcmp(path + pathlen - 5, ".html") == 0) {
+			strcpy(doctype, "text/html");
+		}
+		else {
+			strcpy(doctype, "text/*");
+		}
+		
+		sprintf(htemp, "GET %s HTTP/1.1\r\n"
+						"Host: %s\r\n"	
+						"Accept: %s\r\n"
+						"Accept-Language: en-us\r\n"
+						"If-Modified-Since: %s\r\n"
+						"Connection: close\r\n"
+						"\r\n", path, ip, doctype, gtime);
+	}
+
+	else
+	{
+		int fnamelen = strlen(sendfilename);
+		if(strcmp(sendfilename + fnamelen - 4, ".pdf") == 0) {
+			strcpy(doctype, "application/pdf");
+		}
+		else if(strcmp(sendfilename + fnamelen - 4, ".jpg") == 0) {
+			strcpy(doctype, "image/jpeg");
+		}
+		else if(strcmp(sendfilename + fnamelen - 5, ".html") == 0) {
+			strcpy(doctype, "text/html");
+		}
+		else {
+			strcpy(doctype, "text/*");
+		}
+
+		FILE *fp = fopen(sendfilename, "rb");
+		if (fp == NULL)
+		{
+			perror("Open file failed!\n");
+			exit(EXIT_FAILURE);
+		}
+
+		// length of file
+		fseek(fp, 0, SEEK_END);
+		long length = ftell(fp);
+		
+		fclose(fp);
+
+		sprintf(htemp, "PUT %s HTTP/1.1\r\n"
+						"Host: %s\r\n"	
+						"Content-Type: %s\r\n"
+						"Content-Length: %ld\r\n"
+						"Content-Language: en-us\r\n"
+						"Connection: close\r\n"
+						"\r\n", path, ip, doctype, length);
+	}
+
 
 	int len = strlen(htemp);
 	*header = malloc(len*sizeof(char));
@@ -366,13 +417,23 @@ int main() {
 			char *path;
 			int port = parseurl(url, strlen(url), &ip, &path);
 			char *header;
-			int headerlen = createheader(ip, path, &header);
+			int headerlen = createheader(ip, path, &header, NULL);
 
-			printf("%s  %d\n", ip, port);
-			printf("%s", header);
+			// printf("%s  %d\n", ip, port);
+			// printf("%s", header);
 
 
 			int sockfd = send_request(header, headerlen, ip, port, NULL);
+
+			char * response_header;
+			int res_header_len = getresponse(sockfd, path, &response_header);
+
+			printf("%.*s", res_header_len, response_header);
+
+			free(response_header);
+			free(header);
+			free(path);
+			free(ip);
 			
 		}
 
@@ -385,7 +446,28 @@ int main() {
 				free(line);
 				continue;
 			}
-			// Do stuff
+			
+			char *ip;
+			char *path;
+			int port = parseurl(url, strlen(url), &ip, &path);
+			char *header;
+			int headerlen = createheader(ip, path, &header, filename);
+
+			// printf("%s  %d\n", ip, port);
+			// printf("%s", header);
+
+
+			int sockfd = send_request(header, headerlen, ip, port, filename);
+
+			char * response_header;
+			int res_header_len = getresponse(sockfd, path, &response_header);
+
+			printf("%.*s", res_header_len, response_header);
+
+			free(response_header);
+			free(header);
+			free(path);
+			free(ip);
 
 		}
 
