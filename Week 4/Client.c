@@ -119,16 +119,12 @@ int parse_header(char *buf, int n)
 }
 
 
-int getresponse(int sockfd, char *filepath, char **header) {
+int getresponse(int sockfd, char *filename, char **header) {
 	int nchars;
 	int hsize = 0;
 	int maxlimit = 256;
 	char buff[CHUNKSIZE];
 	bool header_received = false;
-
-	char *filename = strrchr(filepath, '/');
-	if(filename == NULL) filename = filepath;
-	else filename++;
 
 
 	char *htemp = (char *)malloc((maxlimit+2)*sizeof(char));
@@ -163,6 +159,9 @@ int getresponse(int sockfd, char *filepath, char **header) {
 					content_len = parse_header(htemp, hsize);
 					
 					header_received = true;
+
+					if(filename == NULL) break;
+					
 					FILE *fptr = fopen(filename, "w");
 					fprintf(fptr, "%.*s", nchars-k-1, buff+k+1);	// skipping the '\n' in buff[k]
 					total += nchars-k;
@@ -172,6 +171,8 @@ int getresponse(int sockfd, char *filepath, char **header) {
 			}
 		}
 		else {
+			if(filename == NULL) break;
+
 			FILE *fptr = fopen(filename, "a");
 			fprintf(fptr, "%.*s", nchars, buff);
 			total += nchars;
@@ -182,7 +183,7 @@ int getresponse(int sockfd, char *filepath, char **header) {
 	htemp[hsize] = '\0';
     *header = htemp;
 
-	openapp(filename, strlen(filename));
+	if(filename != NULL) openapp(filename, strlen(filename));
 
 	return hsize;
 }
@@ -288,12 +289,12 @@ int createheader(char *ip, char *path, char **header, char *sendfilename) {
 
 	if(sendfilename == NULL)	// GET
 	{
-		char gtime[50];
+		char gtime[100];
 		time_t tim;
 		time(&tim);
 		struct tm t = *gmtime(&tim);
 		DatePlusDays(&t, -2);
-		strftime(gtime, 50, "%a, %d %b %Y %H:%M:%S GMT", &t);
+		strftime(gtime, sizeof(gtime), "%a, %d %b %Y %H:%M:%S GMT", &t);
 
 		int pathlen = strlen(path);
 		if(strcmp(path + pathlen - 4, ".pdf") == 0) {
@@ -414,10 +415,10 @@ int main() {
 			}
 
 			char *ip;
-			char *path;
-			int port = parseurl(url, strlen(url), &ip, &path);
+			char *serverpath;
+			int port = parseurl(url, strlen(url), &ip, &serverpath);
 			char *header;
-			int headerlen = createheader(ip, path, &header, NULL);
+			int headerlen = createheader(ip, serverpath, &header, NULL);
 
 			// printf("%s  %d\n", ip, port);
 			// printf("%s", header);
@@ -425,14 +426,18 @@ int main() {
 
 			int sockfd = send_request(header, headerlen, ip, port, NULL);
 
+			char *filename = strrchr(serverpath, '/');
+			if(filename == NULL) filename = serverpath;
+			else filename++;
+
 			char * response_header;
-			int res_header_len = getresponse(sockfd, path, &response_header);
+			int res_header_len = getresponse(sockfd, filename, &response_header);
 
 			printf("%.*s", res_header_len, response_header);
 
 			free(response_header);
 			free(header);
-			free(path);
+			free(serverpath);
 			free(ip);
 			
 		}
@@ -448,10 +453,10 @@ int main() {
 			}
 			
 			char *ip;
-			char *path;
-			int port = parseurl(url, strlen(url), &ip, &path);
+			char *serverpath;
+			int port = parseurl(url, strlen(url), &ip, &serverpath);
 			char *header;
-			int headerlen = createheader(ip, path, &header, filename);
+			int headerlen = createheader(ip, serverpath, &header, filename);
 
 			// printf("%s  %d\n", ip, port);
 			// printf("%s", header);
@@ -459,14 +464,18 @@ int main() {
 
 			int sockfd = send_request(header, headerlen, ip, port, filename);
 
+			char *filename = strrchr(serverpath, '/');
+			if(filename == NULL) filename = serverpath;
+			else filename++;
+
 			char * response_header;
-			int res_header_len = getresponse(sockfd, path, &response_header);
+			int res_header_len = getresponse(sockfd, NULL, &response_header);
 
 			printf("%.*s", res_header_len, response_header);
 
 			free(response_header);
 			free(header);
-			free(path);
+			free(serverpath);
 			free(ip);
 
 		}
