@@ -4,13 +4,13 @@
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAXLINE (1 << 10)
@@ -266,7 +266,7 @@ int main()
 								  "Last-Modified: %s\r\n"
 								  "\r\n",
 						req.type, length, date);
-				
+
 				puts(response);
 
 				// fwrite(response, 1, strlen(response), fp2);
