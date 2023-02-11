@@ -48,8 +48,74 @@ void openapp(char *filename, int len) {
     }
 }
 
-int myparse(char *header, int headerlen) { // returns content-length, and will be great if we can make the **args for openapp() here
-	return 0;
+int parse_header(char *buf, int n)
+{
+	char line[1024];
+	int i = 0, line_no = 0;
+
+	while (i < n)
+	{
+		int j = 0;
+		while (buf[i] != '\r' && buf[i] != '\n')
+		{
+			line[j++] = buf[i++];
+		}
+		line[j] = '\0';
+		while (buf[i] == '\r' || buf[i] == '\n')
+		{
+			i++;
+		}
+
+		if (line_no == 0)
+		{
+			// parse first line
+			char version[20], msg[100];
+			int status;
+			sscanf(line, "%s %d %s", version, &status, msg);
+
+			// printf("method: %s\n", method);
+			// printf("path: %s\n", path);
+			// printf("version: %s\n", version);
+
+			// strcpy(req->method, method);
+			// strcpy(req->path, path);
+
+			// if (strcmp(method, "GET") != 0)
+			// {
+			// 	flag = false;
+			// 	break;
+			// }
+			// if (strcmp(version, "HTTP/1.1") != 0)
+			// {
+			// 	flag = false;
+			// 	break;
+			// }
+		}
+		else
+		{
+			// parse other lines
+			char key[100], value[100];
+			sscanf(line, "%[^:]: %[^\n]", key, value);
+
+			// printf("key: %s\n", key);
+			// printf("value: %s\n", value);
+
+			if (strcmp(key, "Content-Length") == 0)
+			{
+				return atoi(value);
+			}
+
+			// if (strcmp(key, "Host") != 0)
+			// {
+			// 	flag = false;
+			// 	break;
+			// }
+		}
+
+		++line_no;
+	}
+
+	return -1;
 }
 
 
@@ -93,7 +159,9 @@ int getresponse(int sockfd, char *filepath, char **header) {
 				}
 				if(cnt == 2) { 
 					htemp[hsize++] = '\n';	// put the \n in the header
-					myparse(htemp, hsize); 
+
+					content_len = parse_header(htemp, hsize);
+					
 					header_received = true;
 					FILE *fptr = fopen(filename, "w");
 					fprintf(fptr, "%.*s", nchars-k-1, buff+k+1);	// skipping the '\n' in buff[k]
@@ -108,7 +176,7 @@ int getresponse(int sockfd, char *filepath, char **header) {
 			fprintf(fptr, "%.*s", nchars, buff);
 			total += nchars;
 			fclose(fptr);
-			if(total >= 1256) break;
+			if(total >= content_len) break;
 		}
 	}
 	htemp[hsize] = '\0';
@@ -245,7 +313,7 @@ int createheader(char *ip, char *path, char **header) {
 	return len;
 }
 
-void send_request(char *header, int headerlen, char *ip, int port, char *filename) {
+int send_request(char *header, int headerlen, char *ip, int port, char *filename) {
 
 	int sockfd = createsocket();
 
@@ -267,6 +335,8 @@ void send_request(char *header, int headerlen, char *ip, int port, char *filenam
 	if(filename != NULL) {	// Send file for PUT request
 		sendfile(sockfd, filename);
 	}
+
+	return sockfd;
 }
 
 
@@ -298,9 +368,11 @@ int main() {
 			char *header;
 			int headerlen = createheader(ip, path, &header);
 
+			printf("%s  %d\n", ip, port);
 			printf("%s", header);
 
-			send_request(header, headerlen, ip, port, NULL);
+
+			int sockfd = send_request(header, headerlen, ip, port, NULL);
 			
 		}
 
