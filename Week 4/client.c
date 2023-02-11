@@ -51,27 +51,85 @@ void openapp(char *filename, int len)
 		perror("fork:error");
 		exit(EXIT_FAILURE);
 	}
-	// waitpid(pid, NULL, 0);
 }
 
-int myparse(char *header, int headerlen)
-{ // returns content-length, and will be great if we can make the **args for openapp() here
-	return 0;
+int parse_header(char *buf, int n)
+{
+	char line[1024];
+	int i = 0, line_no = 0;
+
+	while (i < n)
+	{
+		int j = 0;
+		while (buf[i] != '\r' && buf[i] != '\n')
+		{
+			line[j++] = buf[i++];
+		}
+		line[j] = '\0';
+		while (buf[i] == '\r' || buf[i] == '\n')
+		{
+			i++;
+		}
+
+		if (line_no == 0)
+		{
+			// parse first line
+			char version[20], msg[100];
+			int status;
+			sscanf(line, "%s %d %s", version, &status, msg);
+
+			// printf("method: %s\n", method);
+			// printf("path: %s\n", path);
+			// printf("version: %s\n", version);
+
+			// strcpy(req->method, method);
+			// strcpy(req->path, path);
+
+			// if (strcmp(method, "GET") != 0)
+			// {
+			// 	flag = false;
+			// 	break;
+			// }
+			// if (strcmp(version, "HTTP/1.1") != 0)
+			// {
+			// 	flag = false;
+			// 	break;
+			// }
+		}
+		else
+		{
+			// parse other lines
+			char key[100], value[100];
+			sscanf(line, "%[^:]: %[^\n]", key, value);
+
+			// printf("key: %s\n", key);
+			// printf("value: %s\n", value);
+
+			if (strcmp(key, "Content-Length") == 0)
+			{
+				return atoi(value);
+			}
+
+			// if (strcmp(key, "Host") != 0)
+			// {
+			// 	flag = false;
+			// 	break;
+			// }
+		}
+
+		++line_no;
+	}
+
+	return -1;
 }
 
-int getresponse(int sockfd, char *filepath, char **header)
+int getresponse(int sockfd, char *filename, char **header)
 {
 	int nchars;
 	int hsize = 0;
 	int maxlimit = 256;
 	char buff[CHUNKSIZE];
 	bool header_received = false;
-
-	char *filename = strrchr(filepath, '/');
-	if (filename == NULL)
-		filename = filepath;
-	else
-		filename++;
 
 	char *htemp = (char *)malloc((maxlimit + 2) * sizeof(char));
 
@@ -112,8 +170,17 @@ int getresponse(int sockfd, char *filepath, char **header)
 				if (cnt == 2)
 				{
 					htemp[hsize++] = '\n'; // put the \n in the header
+
 					content_len = parse_header(htemp, hsize);
+
 					header_received = true;
+
+					if (filename == NULL)
+					{
+						*header = htemp;
+						return hsize;
+					}
+
 					FILE *fptr = fopen(filename, "w");
 					fprintf(fptr, "%.*s", nchars - k - 1, buff + k + 1); // skipping the '\n' in buff[k]
 					total += nchars - k;
@@ -124,6 +191,9 @@ int getresponse(int sockfd, char *filepath, char **header)
 		}
 		else
 		{
+			if (filename == NULL)
+				break;
+
 			FILE *fptr = fopen(filename, "a");
 			fprintf(fptr, "%.*s", nchars, buff);
 			total += nchars;
@@ -132,10 +202,10 @@ int getresponse(int sockfd, char *filepath, char **header)
 				break;
 		}
 	}
-	htemp[hsize] = '\0';
 	*header = htemp;
 
-	openapp(filename, strlen(filename));
+	if (filename != NULL)
+		openapp(filename, strlen(filename));
 
 	return hsize;
 }
@@ -157,9 +227,15 @@ void givemessage(int sockfd, char *msg, int msgsize)
 
 void sendfile(int sockfd, char *filename)
 {
-	// 	FILE *fptr = fopen(filename, "r");
-
-	// 	fclose(fptr);
+	FILE *fptr = fopen(filename, "rb");
+	char p[CHUNKSIZE + 1] = {0};
+	int bytes = 0;
+	while ((bytes = fread(p, 1, CHUNKSIZE, fptr)) > 0)
+	{
+		send(sockfd, p, bytes, 0);
+		// fwrite(p, 1, bytes, fp2);
+	}
+	fclose(fptr);
 }
 
 /*
@@ -236,43 +312,91 @@ void DatePlusDays(struct tm *date, int days)
 	*date = *gmtime(&date_seconds);
 }
 
-int createheader(char *ip, char *path, char **header)
+int createheader(char *ip, char *path, char **header, char *sendfilename)
 {
-	char gtime[50];
-	time_t tim;
-	time(&tim);
-	struct tm t = *gmtime(&tim);
-	DatePlusDays(&t, -2);
-	strftime(gtime, 50, "%a, %d %b %Y %H:%M:%S GMT", &t);
 
 	char doctype[20];
-	int pathlen = strlen(path);
-	if (strcmp(path + pathlen - 4, ".pdf") == 0)
+	char htemp[256];
+
+	if (sendfilename == NULL) // GET
 	{
-		strcpy(doctype, "application/pdf");
-	}
-	else if (strcmp(path + pathlen - 4, ".jpg") == 0)
-	{
-		strcpy(doctype, "image/jpeg");
-	}
-	else if (strcmp(path + pathlen - 5, ".html") == 0)
-	{
-		strcpy(doctype, "text/html");
-	}
-	else
-	{
-		strcpy(doctype, "text/*");
+		char gtime[100];
+		time_t tim;
+		time(&tim);
+		struct tm t = *gmtime(&tim);
+		DatePlusDays(&t, -2);
+		strftime(gtime, sizeof(gtime), "%a, %d %b %Y %H:%M:%S GMT", &t);
+
+		int pathlen = strlen(path);
+		if (strcmp(path + pathlen - 4, ".pdf") == 0)
+		{
+			strcpy(doctype, "application/pdf");
+		}
+		else if (strcmp(path + pathlen - 4, ".jpg") == 0)
+		{
+			strcpy(doctype, "image/jpeg");
+		}
+		else if (strcmp(path + pathlen - 5, ".html") == 0)
+		{
+			strcpy(doctype, "text/html");
+		}
+		else
+		{
+			strcpy(doctype, "text/*");
+		}
+
+		sprintf(htemp, "GET %s HTTP/1.1\r\n"
+					   "Host: %s\r\n"
+					   "Accept: %s\r\n"
+					   "Accept-Language: en-us\r\n"
+					   "If-Modified-Since: %s\r\n"
+					   "Connection: close\r\n"
+					   "\r\n",
+				path, ip, doctype, gtime);
 	}
 
-	char htemp[256];
-	sprintf(htemp, "GET %s HTTP/1.1\r\n"
-				   "Host: %s\r\n"
-				   "Accept: %s\r\n"
-				   "Accept-Language: en-us\r\n"
-				   "If-Modified-Since: %s\r\n"
-				   "Connection: close\r\n"
-				   "\r\n",
-			path, ip, doctype, gtime);
+	else
+	{
+		int fnamelen = strlen(sendfilename);
+		if (strcmp(sendfilename + fnamelen - 4, ".pdf") == 0)
+		{
+			strcpy(doctype, "application/pdf");
+		}
+		else if (strcmp(sendfilename + fnamelen - 4, ".jpg") == 0)
+		{
+			strcpy(doctype, "image/jpeg");
+		}
+		else if (strcmp(sendfilename + fnamelen - 5, ".html") == 0)
+		{
+			strcpy(doctype, "text/html");
+		}
+		else
+		{
+			strcpy(doctype, "text/*");
+		}
+
+		FILE *fp = fopen(sendfilename, "rb");
+		if (fp == NULL)
+		{
+			perror("Open file failed!\n");
+			exit(EXIT_FAILURE);
+		}
+
+		// length of file
+		fseek(fp, 0, SEEK_END);
+		long length = ftell(fp);
+
+		fclose(fp);
+
+		sprintf(htemp, "PUT %s/%s HTTP/1.1\r\n"
+					   "Host: %s\r\n"
+					   "Content-Type: %s\r\n"
+					   "Content-Length: %ld\r\n"
+					   "Content-Language: en-us\r\n"
+					   "Connection: close\r\n"
+					   "\r\n",
+				path, sendfilename, ip, doctype, length);
+	}
 
 	int len = strlen(htemp);
 	*header = malloc(len * sizeof(char));
@@ -283,6 +407,7 @@ int createheader(char *ip, char *path, char **header)
 
 int send_request(char *header, int headerlen, char *ip, int port, char *filename)
 {
+
 	int sockfd = createsocket();
 
 	struct sockaddr_in servaddr;
@@ -335,20 +460,31 @@ int main()
 			}
 
 			char *ip;
-			char *path;
-			int port = parseurl(url, strlen(url), &ip, &path);
+			char *serverpath;
+			int port = parseurl(url, strlen(url), &ip, &serverpath);
 			char *header;
-			int headerlen = createheader(ip, path, &header);
+			int headerlen = createheader(ip, serverpath, &header, NULL);
 
-			printf("%s", header);
+			// printf("%s  %d\n", ip, port);
+			// printf("%s", header);
 
 			int sockfd = send_request(header, headerlen, ip, port, NULL);
-			printf("Header length: %d\n", headerlen);
 
-			// Receive response
-			char *response;
-			int responselen = getresponse(sockfd, path, &response);
-			printf("Response length: %d\n", responselen);
+			char *filename = strrchr(serverpath, '/');
+			if (filename == NULL)
+				filename = serverpath;
+			else
+				filename++;
+
+			char *response_header;
+			int res_header_len = getresponse(sockfd, filename, &response_header);
+
+			printf("%.*s", res_header_len, response_header);
+
+			free(response_header);
+			free(header);
+			free(serverpath);
+			free(ip);
 		}
 
 		else if (strcmp(cmd, "PUT") == 0)
@@ -361,7 +497,33 @@ int main()
 				free(line);
 				continue;
 			}
-			// Do stuff
+
+			char *ip;
+			char *serverpath;
+			int port = parseurl(url, strlen(url), &ip, &serverpath);
+			char *header;
+			int headerlen = createheader(ip, serverpath, &header, filename);
+
+			// printf("%s  %d\n", ip, port);
+			// printf("%s", header);
+
+			int sockfd = send_request(header, headerlen, ip, port, filename);
+
+			char *filename = strrchr(serverpath, '/');
+			if (filename == NULL)
+				filename = serverpath;
+			else
+				filename++;
+
+			char *response_header;
+			int res_header_len = getresponse(sockfd, NULL, &response_header);
+
+			printf("%.*s", res_header_len, response_header);
+
+			free(response_header);
+			free(header);
+			free(serverpath);
+			free(ip);
 		}
 
 		else if (strcmp(cmd, "QUIT") == 0)

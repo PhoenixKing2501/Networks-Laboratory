@@ -22,9 +22,12 @@ typedef struct _request
 	char method[10];
 	char path[100];
 	char type[100];
+	int length;
 } Request;
 
-int getRequest(int sockfd, char **header)
+bool parse_header(char *header, int headerlen, Request *req);
+
+bool getRequest(int sockfd, Request *req)
 {
 	int nchars;
 	int hsize = 0;
@@ -35,64 +38,100 @@ int getRequest(int sockfd, char **header)
 	char *htemp = malloc((maxlimit + 2) * sizeof(char));
 
 	int cnt = 0;
-	while (!header_received)
+	int total = 0;
+	int content_len = 0;
+	while (true)
 	{
 		puts("Waiting for request...");
 		nchars = recv(sockfd, buff, CHUNKSIZE, 0);
-		printf("nchars = %d\n", nchars);
 
 		if (nchars <= 0)
 		{ // client suddenly disconnects
-			printf("Disconnected...\n");
+			puts("Disconnected...");
 			close(sockfd);
 			free(htemp);
 			exit(EXIT_FAILURE);
 		}
 
-		int k = 0;
-		while (k < nchars)
+		if (!header_received)
 		{
-			if (buff[k] == '\r')
+			int k = 0;
+			while (k < nchars)
 			{
-				cnt++;
-			}
-			else if (buff[k] != '\n' &&
-					 buff[k] != '\r' &&
-					 cnt == 1)
-			{
-				cnt--;
-			}
-			htemp[hsize++] = buff[k++];
-			if (hsize == maxlimit)
-			{ // maxlimit is doubled when about to overflow
-				maxlimit *= 2;
-				htemp = (char *)realloc(htemp, (maxlimit + 2) * sizeof(char));
-			}
-			if (cnt == 2)
-			{
-				htemp[hsize++] = '\n'; // put the \n in the header
-				// myparse(htemp, hsize);
-				header_received = true;
-				// FILE *fptr = fopen("myexample.html", "w");
-				// fprintf(fptr, "%.*s", nchars - k - 1, buff + k + 1); // skipping the '\n' in buff[k]
-				// total += nchars - k;
-				// fclose(fptr);
-				break;
+				if (buff[k] == '\r')
+				{
+					cnt++;
+				}
+				else if (buff[k] != '\n' &&
+						 buff[k] != '\r' &&
+						 cnt == 1)
+				{
+					cnt--;
+				}
+				htemp[hsize++] = buff[k++];
+				if (hsize == maxlimit)
+				{ // maxlimit is doubled when about to overflow
+					maxlimit *= 2;
+					htemp = (char *)realloc(htemp, (maxlimit + 2) * sizeof(char));
+				}
+				if (cnt == 2)
+				{
+					htemp[hsize++] = '\n'; // put the \n in the header
+					// myparse(htemp, hsize);
+					header_received = true;
+					// FILE *fptr = fopen("myexample.html", "w");
+					// fprintf(fptr, "%.*s", nchars - k - 1, buff + k + 1); // skipping the '\n' in buff[k]
+					// total += nchars - k;
+					// fclose(fptr);
+
+					if (!parse_header(htemp, hsize, req))
+					{
+						printf("Invalid request...\n");
+						close(sockfd);
+						free(htemp);
+						return false;
+					}
+
+					if (strcmp(req->method, "GET") == 0)
+					{
+						free(htemp);
+						return true;
+					}
+					else if (strcmp(req->method, "PUT") == 0)
+					{
+						FILE *fptr = fopen(req->path, "wb");
+						if (fptr == NULL)
+						{
+							char response[] = "HTTP/1.1 403 Forbidden\r\n"
+											  "\r\n";
+							send(sockfd, response, sizeof(response) - 1, 0);
+							close(sockfd);
+							free(htemp);
+							exit(EXIT_FAILURE);
+						}
+
+						fwrite(buff + k + 1, sizeof(char), nchars - k - 1, fptr);
+						total += nchars - k;
+						fclose(fptr);
+					}
+
+					break;
+				}
 			}
 		}
-		// else
-		// {
-		// 	FILE *fptr = fopen("myexample.html", "a");
-		// 	fprintf(fptr, "%.*s", nchars, buff);
-		// 	total += nchars;
-		// 	fclose(fptr);
-		// 	if (total >= 1256)
-		// 		break;
-		// }
+		else
+		{
+			FILE *fptr = fopen(req->path, "ab");
+			fwrite(buff, sizeof(char), nchars, fptr);
+			total += nchars;
+			fclose(fptr);
+			if (total >= req->length)
+				break;
+		}
 	}
-	htemp[hsize] = '\0';
-	*header = htemp;
-	return hsize;
+
+	free(htemp);
+	return true;
 }
 
 /**
@@ -162,6 +201,11 @@ bool parse_header(char *buf, int n, Request *req)
 				strcpy(req->type, value);
 			}
 
+			if (strcmp(key, "Content-Length") == 0)
+			{
+				req->length = atoi(value);
+			}
+
 			// if (strcmp(key, "Host") != 0)
 			// {
 			// 	flag = false;
@@ -183,6 +227,14 @@ void getFileLastModified(char *path, char *date)
 	strftime(date, 100, "%a, %d %b %Y %H:%M:%S GMT", tm);
 }
 
+void DatePlusDays(struct tm *date, int days)
+{
+	const time_t ONE_DAY = 24 * 60 * 60;
+	// Seconds since start of epoch
+	time_t date_seconds = mktime(date) + (days * ONE_DAY);
+	*date = *gmtime(&date_seconds);
+}
+
 int main()
 {
 	int sockfd, newsockfd;
@@ -197,7 +249,7 @@ int main()
 
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = INADDR_ANY;
-	serv_addr.sin_port = htons(20000);
+	serv_addr.sin_port = htons(20001);
 
 	if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
 	{
@@ -226,19 +278,26 @@ int main()
 			// Do stuff
 			puts("Doing stuff");
 			char *header;
-			int hsize = getRequest(newsockfd, &header);
-			printf("Request: %s\n", header);
-
 			Request req;
-			if (parse_header(header, hsize, &req))
+			bool valid = getRequest(newsockfd, &req);
+			// printf("Request: %s\n", header);
+
+			// if (parse_header(header, hsize, &req))
+			// {
+			// 	printf("Method: %s\n", req.method);
+			// 	printf("Path: %s\n", req.path);
+			// 	printf("Type: %s\n", req.type);
+			// }
+			// else
+			// {
+			// 	puts("Parse failed");
+			// }
+
+			if (!valid)
 			{
-				printf("Method: %s\n", req.method);
-				printf("Path: %s\n", req.path);
-				printf("Type: %s\n", req.type);
-			}
-			else
-			{
-				puts("Parse failed");
+				char response[] = "HTTP/1.1 400 Bad Request\r\n"
+								  "\r\n";
+				send(newsockfd, response, strlen(response), 0);
 			}
 
 			if (strcmp(req.method, "GET") == 0)
@@ -247,6 +306,9 @@ int main()
 				if (fp == NULL)
 				{
 					perror("Open file failed!\n");
+					char response[] = "HTTP/1.1 404 Not Found\r\n"
+									  "\r\n";
+					send(newsockfd, response, sizeof(response) - 1, 0);
 					exit(EXIT_FAILURE);
 				}
 
@@ -282,6 +344,25 @@ int main()
 					// fwrite(p, 1, bytes, fp2);
 				}
 				fclose(fp);
+			}
+			else if (strcmp(req.method, "PUT") == 0)
+			{
+				char gtime[100];
+				time_t tim;
+				time(&tim);
+				struct tm t = *gmtime(&tim);
+				DatePlusDays(&t, +3);
+				strftime(gtime, sizeof(gtime),
+						 "%a, %d %b %Y %H:%M:%S GMT", &t);
+
+				char response[1 << 10];
+				sprintf(response, "HTTP/1.1 200 OK\r\n"
+								  "Cache-Control: no-store\r\n"
+								  "Expires: %s\r\n"
+								  "\r\n",
+						gtime);
+
+				send(newsockfd, response, strlen(response), 0);
 			}
 
 			close(newsockfd);
