@@ -160,7 +160,10 @@ int getresponse(int sockfd, char *filename, char **header) {
 					
 					header_received = true;
 
-					if(filename == NULL) break;
+					if(filename == NULL) {
+						*header = htemp;
+						return hsize;
+					}
 					
 					FILE *fptr = fopen(filename, "w");
 					fprintf(fptr, "%.*s", nchars-k-1, buff+k+1);	// skipping the '\n' in buff[k]
@@ -180,7 +183,7 @@ int getresponse(int sockfd, char *filename, char **header) {
 			if(total >= content_len) break;
 		}
 	}
-	htemp[hsize] = '\0';
+	// htemp[hsize] = '\0';
     *header = htemp;
 
 	if(filename != NULL) openapp(filename, strlen(filename));
@@ -348,13 +351,13 @@ int createheader(char *ip, char *path, char **header, char *sendfilename) {
 		
 		fclose(fp);
 
-		sprintf(htemp, "PUT %s HTTP/1.1\r\n"
+		sprintf(htemp, "PUT %s/%s HTTP/1.1\r\n"
 						"Host: %s\r\n"	
 						"Content-Type: %s\r\n"
 						"Content-Length: %ld\r\n"
 						"Content-Language: en-us\r\n"
 						"Connection: close\r\n"
-						"\r\n", path, ip, doctype, length);
+						"\r\n", path, sendfilename, ip, doctype, length);
 	}
 
 
