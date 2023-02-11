@@ -4,15 +4,18 @@
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define MAXLINE (1 << 10)
-#define CHUNK_SIZE (1 << 10)
+#define CHUNKSIZE (1 << 10)
+#define BACKLOG 50
 
 typedef struct _request
 {
@@ -21,25 +24,75 @@ typedef struct _request
 	char type[100];
 } Request;
 
-void net_receive(int sockfd, char *buf, int max_size)
+int getRequest(int sockfd, char **header)
 {
-	int n = 0;
-	while (n < max_size)
+	int nchars;
+	int hsize = 0;
+	int maxlimit = 256;
+	char buff[CHUNKSIZE];
+	bool header_received = false;
+
+	char *htemp = malloc((maxlimit + 2) * sizeof(char));
+
+	int cnt = 0;
+	while (!header_received)
 	{
-		// int r = recv(sockfd, buf + n, max_size - n, 0);
-		int r = read(sockfd, buf + n, max_size - n);
-		if (r < 0)
-		{
-			perror("Receive Error!\n");
+		puts("Waiting for request...");
+		nchars = recv(sockfd, buff, CHUNKSIZE, 0);
+		printf("nchars = %d\n", nchars);
+
+		if (nchars <= 0)
+		{ // client suddenly disconnects
+			printf("Disconnected...\n");
 			close(sockfd);
+			free(htemp);
 			exit(EXIT_FAILURE);
 		}
-		else if (r == 0)
+
+		int k = 0;
+		while (k < nchars)
 		{
-			break;
+			if (buff[k] == '\r')
+			{
+				cnt++;
+			}
+			else if (buff[k] != '\n' &&
+					 buff[k] != '\r' &&
+					 cnt == 1)
+			{
+				cnt--;
+			}
+			htemp[hsize++] = buff[k++];
+			if (hsize == maxlimit)
+			{ // maxlimit is doubled when about to overflow
+				maxlimit *= 2;
+				htemp = (char *)realloc(htemp, (maxlimit + 2) * sizeof(char));
+			}
+			if (cnt == 2)
+			{
+				htemp[hsize++] = '\n'; // put the \n in the header
+				// myparse(htemp, hsize);
+				header_received = true;
+				// FILE *fptr = fopen("myexample.html", "w");
+				// fprintf(fptr, "%.*s", nchars - k - 1, buff + k + 1); // skipping the '\n' in buff[k]
+				// total += nchars - k;
+				// fclose(fptr);
+				break;
+			}
 		}
-		n += r;
+		// else
+		// {
+		// 	FILE *fptr = fopen("myexample.html", "a");
+		// 	fprintf(fptr, "%.*s", nchars, buff);
+		// 	total += nchars;
+		// 	fclose(fptr);
+		// 	if (total >= 1256)
+		// 		break;
+		// }
 	}
+	htemp[hsize] = '\0';
+	*header = htemp;
+	return hsize;
 }
 
 /**
@@ -122,67 +175,118 @@ bool parse_header(char *buf, int n, Request *req)
 	return flag;
 }
 
+void getFileLastModified(char *path, char *date)
+{
+	struct stat buf;
+	stat(path, &buf);
+	struct tm *tm = gmtime(&buf.st_mtime);
+	strftime(date, 100, "%a, %d %b %Y %H:%M:%S GMT", tm);
+}
+
 int main()
 {
-	int fd = open("request.txt", O_RDONLY, 0666);
+	int sockfd, newsockfd;
+	socklen_t clilen;
+	struct sockaddr_in cli_addr, serv_addr;
 
-	char buf[1024];
-	int n = read(fd, buf, 1024);
-	buf[n] = '\0';
-	printf("%s", buf);
-
-	Request req = {0};
-	bool flag = parse_header(buf, n, &req);
-	printf("%s\n", flag ? "true" : "false");
-
-	// print request
-	printf("method: `%s`, path: `%s`, type: `%s`\n",
-		   req.method, req.path, req.type);
-
-	// create response
-
-	// read file (send later)
-	FILE *fp = fopen(req.path, "rb");
-	if (fp == NULL)
+	if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 	{
-		perror("Open file failed!\n");
-		exit(EXIT_FAILURE);
+		perror("Cannot create socket!\n");
+		return EXIT_FAILURE;
 	}
 
-	// length of file
-	fseek(fp, 0, SEEK_END);
-	int length = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
+	serv_addr.sin_family = AF_INET;
+	serv_addr.sin_addr.s_addr = INADDR_ANY;
+	serv_addr.sin_port = htons(20000);
 
-	char response[1 << 8];
-	sprintf(response, "HTTP/1.1 200 OK\r\n"
-					  "Content-Type: %s\r\n"
-					  "Content-Length: %d\r\n"
-					  "\r\n",
-			req.type, length);
-
-	FILE *fp2 = fopen("response.pdf", "wb");
-	if (fp2 == NULL)
+	if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
 	{
-		perror("Open file failed!\n");
-		exit(EXIT_FAILURE);
+		perror("Unable to bind local address!\n");
+		return EXIT_FAILURE;
 	}
 
-	fwrite(response, 1, strlen(response), fp2);
-	char p[CHUNK_SIZE + 1] = {0};
+	listen(sockfd, BACKLOG);
 
-	int bytes = 0, total = 0;
-	while ((bytes = fread(p, 1, CHUNK_SIZE, fp)) > 0)
+	while (true)
 	{
-		printf("OK: %d\n", bytes);
-		total += bytes;
-		fwrite(p, 1, bytes, fp2);
+		clilen = sizeof(cli_addr);
+		newsockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
+		puts("Connected");
+
+		if (newsockfd < 0)
+		{
+			perror("Accept Error!\n");
+			return EXIT_FAILURE;
+		}
+
+		if (fork() == 0)
+		{
+			close(sockfd);
+
+			// Do stuff
+			puts("Doing stuff");
+			char *header;
+			int hsize = getRequest(newsockfd, &header);
+			printf("Request: %s\n", header);
+
+			Request req;
+			if (parse_header(header, hsize, &req))
+			{
+				printf("Method: %s\n", req.method);
+				printf("Path: %s\n", req.path);
+				printf("Type: %s\n", req.type);
+			}
+			else
+			{
+				puts("Parse failed");
+			}
+
+			if (strcmp(req.method, "GET") == 0)
+			{
+				FILE *fp = fopen(req.path, "rb");
+				if (fp == NULL)
+				{
+					perror("Open file failed!\n");
+					exit(EXIT_FAILURE);
+				}
+
+				// length of file
+				fseek(fp, 0, SEEK_END);
+				int length = ftell(fp);
+				fseek(fp, 0, SEEK_SET);
+
+				char response[1 << 10];
+				char date[100];
+				getFileLastModified(req.path, date);
+				sprintf(response, "HTTP/1.1 200 OK\r\n"
+								  "Content-Type: %s\r\n"
+								  "Content-Length: %d\r\n"
+								  "Cache-Control: no-store\r\n"
+								  "Content-Language: en-us\r\n"
+								  "Last-Modified: %s\r\n"
+								  "\r\n",
+						req.type, length, date);
+				
+				puts(response);
+
+				// fwrite(response, 1, strlen(response), fp2);
+				send(newsockfd, response, strlen(response), 0);
+				char p[CHUNKSIZE + 1] = {0};
+
+				int bytes = 0, total = 0;
+				while ((bytes = fread(p, 1, CHUNKSIZE, fp)) > 0)
+				{
+					printf("OK: %d\n", bytes);
+					total += bytes;
+					send(newsockfd, p, bytes, 0);
+					// fwrite(p, 1, bytes, fp2);
+				}
+				fclose(fp);
+			}
+
+			close(newsockfd);
+			exit(0);
+		}
+		close(newsockfd);
 	}
-	*p = '\0';
-	fclose(fp);
-	fclose(fp2);
-
-	printf("total: %d\n", total);
-
-	// printf("%s", response);
 }
