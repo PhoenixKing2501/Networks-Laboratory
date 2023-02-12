@@ -232,6 +232,51 @@ int createsocket() {
 }
 
 
+<<<<<<< HEAD
+=======
+// int parseurl(char *url, int len, char **ip, char **path) {
+// 	// char *st = url+7;
+// 	char *st = strstr(url, "://") + 3;
+// 	char *end = st;
+
+// 	while(*end != '/') end++;
+// 	char * t_ip = malloc((end-st+1)*sizeof(char));
+
+// 	int k = 0;
+// 	while(st < end)
+// 	{
+// 		t_ip[k] = *st;
+// 		k++; st++;
+// 	}
+//     t_ip[k] = '\0';
+
+// 	while(*end != ':' && end < url+len) end++;
+// 	char * t_path = malloc((end-st+1)*sizeof(char));
+
+// 	k = 0;
+// 	while(st < end)
+// 	{
+// 		t_path[k] = *st;
+// 		k++; st++;
+// 	}
+//     t_path[k] = '\0';
+
+//     *ip = t_ip;
+//     *path = t_path;
+
+// 	if(end == url+len) return 80;	// default port
+//     end++;      // otherwise *end == ':' so shift end once
+// 	char port[7];
+// 	k = 0;
+// 	while(end < url+len) 
+// 	{
+// 		port[k] = *end;
+// 		k++; end++;
+// 	}
+// 	port[k] = '\0';
+// 	return atoi(port);
+// }
+>>>>>>> 8a476c55cc3c4c3fe06ad0791ba15f07841e7190
 
 int parseurl(char *url, int len, char **ip, char **path) {
 	char port[7] = {0};
