@@ -270,48 +270,48 @@ int createsocket() {
 }
 
 
-int parseurl(char *url, int len, char **ip, char **path) {
-	// char *st = url+7;
-	char *st = strstr(url, "://") + 3;
-	char *end = st;
+// int parseurl(char *url, int len, char **ip, char **path) {
+// 	// char *st = url+7;
+// 	char *st = strstr(url, "://") + 3;
+// 	char *end = st;
 
-	while(*end != '/') end++;
-	char * t_ip = malloc((end-st+1)*sizeof(char));
+// 	while(*end != '/') end++;
+// 	char * t_ip = malloc((end-st+1)*sizeof(char));
 
-	int k = 0;
-	while(st < end)
-	{
-		t_ip[k] = *st;
-		k++; st++;
-	}
-    t_ip[k] = '\0';
+// 	int k = 0;
+// 	while(st < end)
+// 	{
+// 		t_ip[k] = *st;
+// 		k++; st++;
+// 	}
+//     t_ip[k] = '\0';
 
-	while(*end != ':' && end < url+len) end++;
-	char * t_path = malloc((end-st+1)*sizeof(char));
+// 	while(*end != ':' && end < url+len) end++;
+// 	char * t_path = malloc((end-st+1)*sizeof(char));
 
-	k = 0;
-	while(st < end)
-	{
-		t_path[k] = *st;
-		k++; st++;
-	}
-    t_path[k] = '\0';
+// 	k = 0;
+// 	while(st < end)
+// 	{
+// 		t_path[k] = *st;
+// 		k++; st++;
+// 	}
+//     t_path[k] = '\0';
 
-    *ip = t_ip;
-    *path = t_path;
+//     *ip = t_ip;
+//     *path = t_path;
 
-	if(end == url+len) return 80;	// default port
-    end++;      // otherwise *end == ':' so shift end once
-	char port[7];
-	k = 0;
-	while(end < url+len) 
-	{
-		port[k] = *end;
-		k++; end++;
-	}
-	port[k] = '\0';
-	return atoi(port);
-}
+// 	if(end == url+len) return 80;	// default port
+//     end++;      // otherwise *end == ':' so shift end once
+// 	char port[7];
+// 	k = 0;
+// 	while(end < url+len) 
+// 	{
+// 		port[k] = *end;
+// 		k++; end++;
+// 	}
+// 	port[k] = '\0';
+// 	return atoi(port);
+// }
 
 int parseurl(char *url, int len, char **ip, char **path) {
 	char port[7] = {0};
