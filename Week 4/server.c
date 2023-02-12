@@ -16,7 +16,17 @@
 #define MAXLINE (1 << 10)
 #define CHUNKSIZE (1 << 10)
 #define BACKLOG 50
+#define SERV_PORT 20000
 
+/**
+ * @brief @Request struct
+ * @param method method of request
+ * @param path path of file
+ * @param type type of file
+ * @param length length of file
+ * @note type is only used for GET request
+ * @note length is only used for PUT request
+ */
 typedef struct _request
 {
 	char method[10];
@@ -27,6 +37,21 @@ typedef struct _request
 
 bool parse_header(char *header, int headerlen, Request *req);
 
+void sendResponseHeader(int sockfd, char *msg, size_t len)
+{
+	printf("Sending response header...\n%s\n", msg);
+	send(sockfd, msg, len, 0);
+}
+
+/**
+ * @brief get request from client
+ * @param sockfd socket file descriptor
+ * @param req request
+ * @return true if get request success
+ * @return false if get request failed
+ * @note if the request is PUT, the file will be written to disk
+ * @note if the request is GET, the file will be sent to client
+ */
 bool getRequest(int sockfd, Request *req)
 {
 	int nchars;
@@ -39,10 +64,8 @@ bool getRequest(int sockfd, Request *req)
 
 	int cnt = 0;
 	int total = 0;
-	int content_len = 0;
 	while (true)
 	{
-		puts("Waiting for request...");
 		nchars = recv(sockfd, buff, CHUNKSIZE, 0);
 
 		if (nchars <= 0)
@@ -72,28 +95,46 @@ bool getRequest(int sockfd, Request *req)
 				if (hsize == maxlimit)
 				{ // maxlimit is doubled when about to overflow
 					maxlimit *= 2;
-					htemp = (char *)realloc(htemp, (maxlimit + 2) * sizeof(char));
+					htemp = realloc(htemp, (maxlimit + 2) * sizeof(char));
 				}
 				if (cnt == 2)
 				{
 					htemp[hsize++] = '\n'; // put the \n in the header
-					// myparse(htemp, hsize);
 					header_received = true;
-					// FILE *fptr = fopen("myexample.html", "w");
-					// fprintf(fptr, "%.*s", nchars - k - 1, buff + k + 1); // skipping the '\n' in buff[k]
-					// total += nchars - k;
-					// fclose(fptr);
+
+					printf("Header received...\n%.*s\n", hsize, htemp);
 
 					if (!parse_header(htemp, hsize, req))
 					{
 						printf("Invalid request...\n");
-						close(sockfd);
 						free(htemp);
 						return false;
 					}
 
 					if (strcmp(req->method, "GET") == 0)
 					{
+						// Check permissions
+						struct stat st;
+						if (stat(req->path, &st) < 0)
+						{
+							char response[] = "HTTP/1.1 404 Not Found\r\n"
+											  "\r\n";
+							sendResponseHeader(sockfd, response, sizeof(response) - 1);
+							close(sockfd);
+							free(htemp);
+							exit(EXIT_FAILURE);
+						}
+
+						if (!(st.st_mode & S_IREAD))
+						{
+							char response[] = "HTTP/1.1 403 Forbidden\r\n"
+											  "\r\n";
+							sendResponseHeader(sockfd, response, sizeof(response) - 1);
+							close(sockfd);
+							free(htemp);
+							exit(EXIT_FAILURE);
+						}
+
 						free(htemp);
 						return true;
 					}
@@ -104,14 +145,14 @@ bool getRequest(int sockfd, Request *req)
 						{
 							char response[] = "HTTP/1.1 403 Forbidden\r\n"
 											  "\r\n";
-							send(sockfd, response, sizeof(response) - 1, 0);
+							sendResponseHeader(sockfd, response, sizeof(response) - 1);
 							close(sockfd);
 							free(htemp);
 							exit(EXIT_FAILURE);
 						}
 
 						fwrite(buff + k + 1, sizeof(char), nchars - k - 1, fptr);
-						total += nchars - k;
+						total += nchars - k - 1;
 						fclose(fptr);
 					}
 
@@ -160,40 +201,45 @@ bool parse_header(char *buf, int n, Request *req)
 			i++;
 		}
 
-		puts("----------");
-
 		if (line_no == 0)
 		{
 			// parse first line
 			char method[10], path[100], version[10];
-			sscanf(line, "%s %s %s", method, path, version);
+			sscanf(line, "%s %s %[^\n]", method, path, version);
 
-			printf("method: %s\n", method);
-			printf("path: %s\n", path);
-			printf("version: %s\n", version);
+			// printf("method: %s\n", method);
+			// printf("path: %s\n", path);
+			// printf("version: %s\n", version);
 
 			strcpy(req->method, method);
 			strcpy(req->path, path);
 
-			// if (strcmp(method, "GET") != 0)
-			// {
-			// 	flag = false;
-			// 	break;
-			// }
-			// if (strcmp(version, "HTTP/1.1") != 0)
-			// {
-			// 	flag = false;
-			// 	break;
-			// }
+			if (strcmp(method, "GET") != 0 &&
+				strcmp(method, "PUT") != 0)
+			{
+				flag = false;
+				break;
+			}
+			if (strcmp(version, "HTTP/1.1") != 0)
+			{
+				flag = false;
+				break;
+			}
 		}
 		else
 		{
 			// parse other lines
-			char key[100], value[100];
+			char key[100] = {0}, value[100] = {0};
 			sscanf(line, "%[^:]: %[^\n]", key, value);
 
-			printf("key: %s\n", key);
-			printf("value: %s\n", value);
+			if (*value == '\0')
+			{
+				flag = false;
+				break;
+			}
+
+			// printf("key: %s\n", key);
+			// printf("value: %s\n", value);
 
 			if (strcmp(key, "Content-Type") == 0 ||
 				strcmp(key, "Accept") == 0)
@@ -205,12 +251,6 @@ bool parse_header(char *buf, int n, Request *req)
 			{
 				req->length = atoi(value);
 			}
-
-			// if (strcmp(key, "Host") != 0)
-			// {
-			// 	flag = false;
-			// 	break;
-			// }
 		}
 
 		++line_no;
@@ -235,6 +275,22 @@ void DatePlusDays(struct tm *date, int days)
 	*date = *gmtime(&date_seconds);
 }
 
+void logRequest(const Request *req, struct sockaddr_in *cli_addr)
+{
+	char date[100];
+	time_t now = time(NULL);
+	struct tm *tm = gmtime(&now);
+	strftime(date, sizeof(date), "%d-%m-%y:%H-%M-%S", tm);
+
+	FILE *fptr = fopen("AccessLog.txt", "a");
+	fprintf(fptr, "%s:%s:%d:%s:%s\n",
+			date,
+			inet_ntoa(cli_addr->sin_addr),
+			ntohs(cli_addr->sin_port),
+			req->method,
+			req->path);
+}
+
 int main()
 {
 	int sockfd, newsockfd;
@@ -249,7 +305,7 @@ int main()
 
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = INADDR_ANY;
-	serv_addr.sin_port = htons(20001);
+	serv_addr.sin_port = htons(SERV_PORT);
 
 	if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
 	{
@@ -275,29 +331,16 @@ int main()
 		{
 			close(sockfd);
 
-			// Do stuff
-			puts("Doing stuff");
-			char *header;
 			Request req;
 			bool valid = getRequest(newsockfd, &req);
-			// printf("Request: %s\n", header);
-
-			// if (parse_header(header, hsize, &req))
-			// {
-			// 	printf("Method: %s\n", req.method);
-			// 	printf("Path: %s\n", req.path);
-			// 	printf("Type: %s\n", req.type);
-			// }
-			// else
-			// {
-			// 	puts("Parse failed");
-			// }
 
 			if (!valid)
 			{
 				char response[] = "HTTP/1.1 400 Bad Request\r\n"
 								  "\r\n";
-				send(newsockfd, response, strlen(response), 0);
+				sendResponseHeader(newsockfd, response, sizeof(response) - 1);
+				close(newsockfd);
+				exit(EXIT_FAILURE);
 			}
 
 			if (strcmp(req.method, "GET") == 0)
@@ -308,13 +351,13 @@ int main()
 					perror("Open file failed!\n");
 					char response[] = "HTTP/1.1 404 Not Found\r\n"
 									  "\r\n";
-					send(newsockfd, response, sizeof(response) - 1, 0);
+					sendResponseHeader(newsockfd, response, sizeof(response) - 1);
 					exit(EXIT_FAILURE);
 				}
 
 				// length of file
 				fseek(fp, 0, SEEK_END);
-				int length = ftell(fp);
+				long length = ftell(fp);
 				fseek(fp, 0, SEEK_SET);
 
 				char response[1 << 10];
@@ -322,26 +365,21 @@ int main()
 				getFileLastModified(req.path, date);
 				sprintf(response, "HTTP/1.1 200 OK\r\n"
 								  "Content-Type: %s\r\n"
-								  "Content-Length: %d\r\n"
+								  "Content-Length: %ld\r\n"
 								  "Cache-Control: no-store\r\n"
 								  "Content-Language: en-us\r\n"
 								  "Last-Modified: %s\r\n"
 								  "\r\n",
 						req.type, length, date);
 
-				puts(response);
-
-				// fwrite(response, 1, strlen(response), fp2);
-				send(newsockfd, response, strlen(response), 0);
+				sendResponseHeader(newsockfd, response, strlen(response));
 				char p[CHUNKSIZE + 1] = {0};
 
 				int bytes = 0, total = 0;
 				while ((bytes = fread(p, 1, CHUNKSIZE, fp)) > 0)
 				{
-					printf("OK: %d\n", bytes);
 					total += bytes;
 					send(newsockfd, p, bytes, 0);
-					// fwrite(p, 1, bytes, fp2);
 				}
 				fclose(fp);
 			}
@@ -362,8 +400,10 @@ int main()
 								  "\r\n",
 						gtime);
 
-				send(newsockfd, response, strlen(response), 0);
+				sendResponseHeader(newsockfd, response, strlen(response));
 			}
+
+			logRequest(&req, &cli_addr);
 
 			close(newsockfd);
 			exit(0);
