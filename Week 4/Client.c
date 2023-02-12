@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/poll.h>
 
 
 #define CHUNKSIZE (1<<10)
@@ -48,7 +49,7 @@ void openapp(char *filename, int len) {
     }
 }
 
-int parse_header(char *buf, int n)
+int parse_header(char *buf, int n, int *status)
 {
 	char line[1024];
 	int i = 0, line_no = 0;
@@ -70,8 +71,8 @@ int parse_header(char *buf, int n)
 		{
 			// parse first line
 			char version[20], msg[100];
-			int status;
-			sscanf(line, "%s %d %s", version, &status, msg);
+			// int status;
+			sscanf(line, "%s %d %s", version, status, msg);
 
 			// printf("method: %s\n", method);
 			// printf("path: %s\n", path);
@@ -132,14 +133,31 @@ int getresponse(int sockfd, char *filename, char **header) {
 	int cnt = 0;
 	int total = 0;
 	int content_len = 0;
+	int status = 0;
+
+	struct pollfd fdset[1]={{.fd=sockfd, .events=POLLIN}};
+	int ret;
+
 	while(1) {
+		ret = poll(fdset, 1, 3000);
+		if(ret < 0) {
+			perror("poll:error");
+		}
+		if(ret == 0) {
+			puts("REQUEST TIMEOUT");
+			*header = NULL;
+			return 0;
+		}
+
 		nchars = recv(sockfd, buff, CHUNKSIZE, 0);
 
 		if(nchars <= 0) {	// server suddenly disconnects
-			printf("Disconnected...\n");
-			close(sockfd);
+			// close(sockfd);
 			free(htemp);
-			exit(EXIT_FAILURE);
+			puts("Disconnected...");
+			*header = NULL;
+			return 0;
+			// exit(EXIT_FAILURE);
 		}
 
 		if(!header_received)
@@ -156,17 +174,39 @@ int getresponse(int sockfd, char *filename, char **header) {
 				if(cnt == 2) { 
 					htemp[hsize++] = '\n';	// put the \n in the header
 
-					content_len = parse_header(htemp, hsize);
+					content_len = parse_header(htemp, hsize, &status);
 					
 					header_received = true;
 
-					if(filename == NULL) {
+					switch(status)
+					{
+						case 200:
+							puts("200 OK");
+						break;
+
+						case 400:
+							puts("400 Bad Request");
+						break;
+
+						case 403:
+							puts("403 Forbidden");
+						break;
+
+						case 404:
+							puts("404 Not Found");
+						break;
+
+						default:
+							printf("%d Unkown Error\n", status);
+					}
+
+					if(filename == NULL && status != 200) {
 						*header = htemp;
 						return hsize;
 					}
 					
-					FILE *fptr = fopen(filename, "w");
-					fprintf(fptr, "%.*s", nchars-k-1, buff+k+1);	// skipping the '\n' in buff[k]
+					FILE *fptr = fopen(filename, "wb");
+					fwrite(buff+k+1, sizeof(char), nchars-k-1, fptr);
 					total += nchars-k;
 					fclose(fptr);
 					break;
@@ -174,10 +214,10 @@ int getresponse(int sockfd, char *filename, char **header) {
 			}
 		}
 		else {
-			if(filename == NULL) break;
+			if(filename == NULL && status != 200) break;
 
-			FILE *fptr = fopen(filename, "a");
-			fprintf(fptr, "%.*s", nchars, buff);
+			FILE *fptr = fopen(filename, "ab");
+			fwrite(buff, sizeof(char), nchars, fptr);
 			total += nchars;
 			fclose(fptr);
 			if(total >= content_len) break;
@@ -231,7 +271,8 @@ int createsocket() {
 
 
 int parseurl(char *url, int len, char **ip, char **path) {
-	char *st = url+7;
+	// char *st = url+7;
+	char *st = strstr(url, "://") + 3;
 	char *end = st;
 
 	while(*end != '/') end++;
@@ -262,6 +303,60 @@ int parseurl(char *url, int len, char **ip, char **path) {
 	if(end == url+len) return 80;	// default port
     end++;      // otherwise *end == ':' so shift end once
 	char port[7];
+	k = 0;
+	while(end < url+len) 
+	{
+		port[k] = *end;
+		k++; end++;
+	}
+	port[k] = '\0';
+	return atoi(port);
+}
+
+int parseurl(char *url, int len, char **ip, char **path) {
+	char port[7] = {0};
+	char *st = strstr(url, "://") + 3;
+	char *end = st;
+
+	while(*end != ':' && *end != '/') end++;
+	char * t_ip = malloc((end-st+1)*sizeof(char));
+	int k = 0;
+	while(st < end)
+	{
+		t_ip[k] = *st;
+		k++; st++;
+	}
+    t_ip[k] = '\0';
+
+	if(*end == ':') {
+		while(*end != '/') end++;
+		st++;	// start from next to ':'
+		k = 0;
+		while(st < end) {
+			port[k] = *st;
+			k++; st++;
+		}
+		port[k] = '\0';
+	}
+
+	while(*end != ':' && end < url+len) end++;
+	char * t_path = malloc((end-st+1)*sizeof(char));
+	k = 0;
+	while(st < end)
+	{
+		t_path[k] = *st;
+		k++; st++;
+	}
+    t_path[k] = '\0';
+
+    *ip = t_ip;
+    *path = t_path;
+
+	if(end == url+len) {
+		if(port[0] == '\0') return 80;	// default port
+		else return atoi(port);
+	}
+    end++;      // otherwise *end == ':' so shift end once
 	k = 0;
 	while(end < url+len) 
 	{
@@ -438,7 +533,7 @@ int main() {
 
 			printf("%.*s", res_header_len, response_header);
 
-			free(response_header);
+			if(response_header) free(response_header);
 			free(header);
 			free(serverpath);
 			free(ip);
@@ -476,7 +571,7 @@ int main() {
 
 			printf("%.*s", res_header_len, response_header);
 
-			free(response_header);
+			if(response_header) free(response_header);
 			free(header);
 			free(serverpath);
 			free(ip);
