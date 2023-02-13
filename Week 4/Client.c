@@ -1,4 +1,4 @@
-
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +15,14 @@
 
 
 #define CHUNKSIZE (1<<10)
+
+char *getDateNow() {
+	static char date[100];
+	time_t now = time(NULL);
+	struct tm *tm = gmtime(&now);
+	strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", tm);
+	return date;
+}
 
 
 void openapp(char *filename, int len) {
@@ -181,7 +189,7 @@ int getresponse(int sockfd, char *filename, char **header) {
 					
 					FILE *fptr = fopen(filename, "wb");
 					fwrite(buff+k+1, sizeof(char), nchars-k-1, fptr);
-					total += nchars-k;
+					total += nchars-k-1;
 					fclose(fptr);
 					break;
 				} 
@@ -329,12 +337,13 @@ int createheader(char *ip, int port, char *path, char **header, char *sendfilena
 		}
 		
 		sprintf(htemp, "GET %s HTTP/1.1\r\n"
-						"Host: %s:%d\r\n"	
+						"Host: %s:%d\r\n"
+						"Date: %s\r\n"	
 						"Accept: %s\r\n"
 						"Accept-Language: en-us\r\n"
 						"If-Modified-Since: %s\r\n"
 						"Connection: close\r\n"
-						"\r\n", path, ip, port, doctype, gtime);
+						"\r\n", path, ip, port, getDateNow(), doctype, gtime);
 	}
 
 	else
@@ -366,13 +375,19 @@ int createheader(char *ip, int port, char *path, char **header, char *sendfilena
 		
 		fclose(fp);
 
+		// sendfilename can be a path, extract the filename
+		char *filename = strrchr(sendfilename, '/');
+		if(filename == NULL) filename = sendfilename;
+		else filename++;
+
 		sprintf(htemp, "PUT %s/%s HTTP/1.1\r\n"
-						"Host: %s:%d\r\n"	
+						"Host: %s:%d\r\n"
+						"Date: %s\r\n"
 						"Content-Type: %s\r\n"
 						"Content-Length: %ld\r\n"
 						"Content-Language: en-us\r\n"
 						"Connection: close\r\n"
-						"\r\n", path, sendfilename, ip, port, doctype, length);
+						"\r\n", path, filename, ip, port, getDateNow(), doctype, length);
 	}
 
 
