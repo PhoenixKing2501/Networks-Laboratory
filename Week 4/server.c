@@ -47,12 +47,12 @@ char *getDateNow()
 	return date;
 }
 
-void sendResponseHeader(int sockfd, char *raw_msg)
+bool sendResponseHeader(int sockfd, char *raw_msg)
 {
 	char msg[1 << 11];
 	sprintf(msg, raw_msg, getDateNow());
 	printf("Sending response header...\n%s\n", msg);
-	send(sockfd, msg, strlen(msg), 0);
+	return send(sockfd, msg, strlen(msg), 0) >= 0;
 }
 
 /**
@@ -417,14 +417,25 @@ int main()
 								  "\r\n",
 						req.type, length, date);
 
-				sendResponseHeader(newsockfd, response);
+				if (!sendResponseHeader(newsockfd, response))
+				{
+					perror("Send Error!\n");
+					fclose(fp);
+					goto disconnect;
+				}
+
 				char p[CHUNKSIZE + 1] = {0};
 
 				int bytes = 0, total = 0;
 				while ((bytes = fread(p, 1, CHUNKSIZE, fp)) > 0)
 				{
 					total += bytes;
-					send(newsockfd, p, bytes, 0);
+					if (send(newsockfd, p, bytes, 0) < 0)
+					{
+						perror("Send Error!\n");
+						fclose(fp);
+						goto disconnect;
+					}
 				}
 				fclose(fp);
 			}
@@ -447,9 +458,13 @@ int main()
 								  "\r\n",
 						gtime);
 
-				sendResponseHeader(newsockfd, response);
+				if (!sendResponseHeader(newsockfd, response))
+				{
+					perror("Send Error!\n");
+					goto disconnect;
+				}
 			}
-
+		disconnect:
 			logRequest(&req, &cli_addr);
 
 			close(newsockfd);
