@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -32,15 +34,109 @@ typedef struct _request
 	char method[10];
 	char path[100];
 	char type[100];
+	char time[100];
 	int length;
 } Request;
 
-bool parse_header(char *header, int headerlen, Request *req);
-
-void sendResponseHeader(int sockfd, char *msg, size_t len)
+char *getDateNow()
 {
+	static char date[100];
+	time_t now = time(NULL);
+	struct tm *tm = gmtime(&now);
+	strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", tm);
+	return date;
+}
+
+void sendResponseHeader(int sockfd, char *raw_msg)
+{
+	char msg[1 << 11];
+	sprintf(msg, raw_msg, getDateNow());
 	printf("Sending response header...\n%s\n", msg);
-	send(sockfd, msg, len, 0);
+	send(sockfd, msg, strlen(msg), 0);
+}
+
+/**
+ * @brief parse http header
+ * @param buf buffer
+ * @param n length of buf
+ * @param req request
+ * @param req_time request time
+ * @return true if parse success
+ * @return false if parse failed
+ */
+bool parse_header(char *buf, int n, Request *req)
+{
+	bool flag = true;
+	char line[1024];
+	int i = 0, line_no = 0;
+
+	while (i < n)
+	{
+		int j = 0;
+		while (buf[i] != '\r' && buf[i] != '\n')
+		{
+			line[j++] = buf[i++];
+		}
+		line[j] = '\0';
+		while (buf[i] == '\r' || buf[i] == '\n')
+		{
+			i++;
+		}
+
+		if (line_no == 0)
+		{
+			// parse first line
+			char method[10], path[100], version[10];
+			sscanf(line, "%s %s %[^\n]", method, path, version);
+
+			strcpy(req->method, method);
+			strcpy(req->path, path);
+
+			if (strcmp(method, "GET") != 0 &&
+				strcmp(method, "PUT") != 0)
+			{
+				flag = false;
+				break;
+			}
+			if (strcmp(version, "HTTP/1.1") != 0)
+			{
+				flag = false;
+				break;
+			}
+		}
+		else
+		{
+			// parse other lines
+			char key[100] = {0}, value[100] = {0};
+			sscanf(line, "%[^:]: %[^\n]", key, value);
+
+			if (*value == '\0')
+			{
+				flag = false;
+				break;
+			}
+
+			if (strcmp(key, "Content-Type") == 0 ||
+				strcmp(key, "Accept") == 0)
+			{
+				strcpy(req->type, value);
+			}
+
+			if (strcmp(key, "Content-Length") == 0)
+			{
+				req->length = atoi(value);
+			}
+
+			if (strcmp(key, "If-Modified-Since") == 0)
+			{
+				strcpy(req->time, value);
+			}
+		}
+
+		++line_no;
+	}
+
+	return flag;
 }
 
 /**
@@ -118,8 +214,10 @@ bool getRequest(int sockfd, Request *req)
 						if (stat(req->path, &st) < 0)
 						{
 							char response[] = "HTTP/1.1 404 Not Found\r\n"
+											  "Connection: close\r\n"
+											  "Date: %s\r\n"
 											  "\r\n";
-							sendResponseHeader(sockfd, response, sizeof(response) - 1);
+							sendResponseHeader(sockfd, response);
 							close(sockfd);
 							free(htemp);
 							exit(EXIT_FAILURE);
@@ -128,11 +226,34 @@ bool getRequest(int sockfd, Request *req)
 						if (!(st.st_mode & S_IREAD))
 						{
 							char response[] = "HTTP/1.1 403 Forbidden\r\n"
+											  "Connection: close\r\n"
+											  "Date: %s\r\n"
 											  "\r\n";
-							sendResponseHeader(sockfd, response, sizeof(response) - 1);
+							sendResponseHeader(sockfd, response);
 							close(sockfd);
 							free(htemp);
 							exit(EXIT_FAILURE);
+						}
+
+						// Get modified time of file
+						if (req->time[0] != '\0')
+						{
+							time_t file_time = timegm(gmtime(&st.st_mtime));
+
+							struct tm tm;
+							strptime(req->time, "%a, %d %b %Y %H:%M:%S %Z", &tm);
+							time_t req_time = timegm(&tm);
+							if (req_time >= file_time)
+							{
+								char response[] = "HTTP/1.1 304 Not Modified\r\n"
+												  "Connection: close\r\n"
+												  "Date: %s\r\n"
+												  "\r\n";
+								sendResponseHeader(sockfd, response);
+								close(sockfd);
+								free(htemp);
+								exit(EXIT_FAILURE);
+							}
 						}
 
 						free(htemp);
@@ -144,8 +265,10 @@ bool getRequest(int sockfd, Request *req)
 						if (fptr == NULL)
 						{
 							char response[] = "HTTP/1.1 403 Forbidden\r\n"
+											  "Connection: close\r\n"
+											  "Date: %s\r\n"
 											  "\r\n";
-							sendResponseHeader(sockfd, response, sizeof(response) - 1);
+							sendResponseHeader(sockfd, response);
 							close(sockfd);
 							free(htemp);
 							exit(EXIT_FAILURE);
@@ -173,90 +296,6 @@ bool getRequest(int sockfd, Request *req)
 
 	free(htemp);
 	return true;
-}
-
-/**
- * @brief parse http header
- * @param buf buffer
- * @param n length of buf
- * @return true if parse success
- * @return false if parse failed
- */
-bool parse_header(char *buf, int n, Request *req)
-{
-	bool flag = true;
-	char line[1024];
-	int i = 0, line_no = 0;
-
-	while (i < n)
-	{
-		int j = 0;
-		while (buf[i] != '\r' && buf[i] != '\n')
-		{
-			line[j++] = buf[i++];
-		}
-		line[j] = '\0';
-		while (buf[i] == '\r' || buf[i] == '\n')
-		{
-			i++;
-		}
-
-		if (line_no == 0)
-		{
-			// parse first line
-			char method[10], path[100], version[10];
-			sscanf(line, "%s %s %[^\n]", method, path, version);
-
-			// printf("method: %s\n", method);
-			// printf("path: %s\n", path);
-			// printf("version: %s\n", version);
-
-			strcpy(req->method, method);
-			strcpy(req->path, path);
-
-			if (strcmp(method, "GET") != 0 &&
-				strcmp(method, "PUT") != 0)
-			{
-				flag = false;
-				break;
-			}
-			if (strcmp(version, "HTTP/1.1") != 0)
-			{
-				flag = false;
-				break;
-			}
-		}
-		else
-		{
-			// parse other lines
-			char key[100] = {0}, value[100] = {0};
-			sscanf(line, "%[^:]: %[^\n]", key, value);
-
-			if (*value == '\0')
-			{
-				flag = false;
-				break;
-			}
-
-			// printf("key: %s\n", key);
-			// printf("value: %s\n", value);
-
-			if (strcmp(key, "Content-Type") == 0 ||
-				strcmp(key, "Accept") == 0)
-			{
-				strcpy(req->type, value);
-			}
-
-			if (strcmp(key, "Content-Length") == 0)
-			{
-				req->length = atoi(value);
-			}
-		}
-
-		++line_no;
-	}
-
-	return flag;
 }
 
 void getFileLastModified(char *path, char *date)
@@ -331,14 +370,16 @@ int main()
 		{
 			close(sockfd);
 
-			Request req;
+			Request req = {0};
 			bool valid = getRequest(newsockfd, &req);
 
 			if (!valid)
 			{
 				char response[] = "HTTP/1.1 400 Bad Request\r\n"
+								  "Connection: close\r\n"
+								  "Date: %s\r\n"
 								  "\r\n";
-				sendResponseHeader(newsockfd, response, sizeof(response) - 1);
+				sendResponseHeader(newsockfd, response);
 				close(newsockfd);
 				exit(EXIT_FAILURE);
 			}
@@ -350,8 +391,10 @@ int main()
 				{
 					perror("Open file failed!\n");
 					char response[] = "HTTP/1.1 404 Not Found\r\n"
+									  "Connection: close\r\n"
+									  "Date: %s\r\n"
 									  "\r\n";
-					sendResponseHeader(newsockfd, response, sizeof(response) - 1);
+					sendResponseHeader(newsockfd, response);
 					exit(EXIT_FAILURE);
 				}
 
@@ -368,11 +411,13 @@ int main()
 								  "Content-Length: %ld\r\n"
 								  "Cache-Control: no-store\r\n"
 								  "Content-Language: en-us\r\n"
+								  "Connection: close\r\n"
 								  "Last-Modified: %s\r\n"
+								  "Date: %%s\r\n"
 								  "\r\n",
 						req.type, length, date);
 
-				sendResponseHeader(newsockfd, response, strlen(response));
+				sendResponseHeader(newsockfd, response);
 				char p[CHUNKSIZE + 1] = {0};
 
 				int bytes = 0, total = 0;
@@ -396,11 +441,13 @@ int main()
 				char response[1 << 10];
 				sprintf(response, "HTTP/1.1 200 OK\r\n"
 								  "Cache-Control: no-store\r\n"
+								  "Connection: close\r\n"
 								  "Expires: %s\r\n"
+								  "Date: %%s\r\n"
 								  "\r\n",
 						gtime);
 
-				sendResponseHeader(newsockfd, response, strlen(response));
+				sendResponseHeader(newsockfd, response);
 			}
 
 			logRequest(&req, &cli_addr);

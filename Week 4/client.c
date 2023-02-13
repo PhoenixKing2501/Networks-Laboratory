@@ -1,18 +1,28 @@
-
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#define _GNU_SOURCE
 
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #define CHUNKSIZE (1 << 10)
+
+char *getDateNow()
+{
+	static char date[100];
+	time_t now = time(NULL);
+	struct tm *tm = gmtime(&now);
+	strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S GMT", tm);
+	return date;
+}
 
 void openapp(char *filename, int len)
 {
@@ -20,11 +30,11 @@ void openapp(char *filename, int len)
 
 	if (strcmp(filename + len - 4, ".pdf") == 0)
 	{
-		strcpy(cmd, "acrobat");
+		strcpy(cmd, "evince");
 	}
 	else if (strcmp(filename + len - 4, ".jpg") == 0)
 	{
-		strcpy(cmd, "firefox");
+		strcpy(cmd, "eog");
 	}
 	else if (strcmp(filename + len - 5, ".html") == 0)
 	{
@@ -53,7 +63,7 @@ void openapp(char *filename, int len)
 	}
 }
 
-int parse_header(char *buf, int n)
+int parse_header(char *buf, int n, int *status)
 {
 	char line[1024];
 	int i = 0, line_no = 0;
@@ -75,26 +85,7 @@ int parse_header(char *buf, int n)
 		{
 			// parse first line
 			char version[20], msg[100];
-			int status;
-			sscanf(line, "%s %d %s", version, &status, msg);
-
-			// printf("method: %s\n", method);
-			// printf("path: %s\n", path);
-			// printf("version: %s\n", version);
-
-			// strcpy(req->method, method);
-			// strcpy(req->path, path);
-
-			// if (strcmp(method, "GET") != 0)
-			// {
-			// 	flag = false;
-			// 	break;
-			// }
-			// if (strcmp(version, "HTTP/1.1") != 0)
-			// {
-			// 	flag = false;
-			// 	break;
-			// }
+			sscanf(line, "%s %d %s", version, status, msg);
 		}
 		else
 		{
@@ -102,19 +93,10 @@ int parse_header(char *buf, int n)
 			char key[100], value[100];
 			sscanf(line, "%[^:]: %[^\n]", key, value);
 
-			// printf("key: %s\n", key);
-			// printf("value: %s\n", value);
-
 			if (strcmp(key, "Content-Length") == 0)
 			{
 				return atoi(value);
 			}
-
-			// if (strcmp(key, "Host") != 0)
-			// {
-			// 	flag = false;
-			// 	break;
-			// }
 		}
 
 		++line_no;
@@ -136,16 +118,35 @@ int getresponse(int sockfd, char *filename, char **header)
 	int cnt = 0;
 	int total = 0;
 	int content_len = 0;
+	int status = 0;
+
+	struct pollfd fdset[1] = {{.fd = sockfd, .events = POLLIN}};
+	int ret;
+
 	while (1)
 	{
+		ret = poll(fdset, 1, 3000);
+		if (ret < 0)
+		{
+			perror("poll:error");
+		}
+		if (ret == 0)
+		{
+			puts("REQUEST TIMEOUT");
+			*header = NULL;
+			return 0;
+		}
+
 		nchars = recv(sockfd, buff, CHUNKSIZE, 0);
 
 		if (nchars <= 0)
 		{ // server suddenly disconnects
-			printf("Disconnected...\n");
-			close(sockfd);
+			// close(sockfd);
 			free(htemp);
-			exit(EXIT_FAILURE);
+			puts("Disconnected...");
+			*header = NULL;
+			return 0;
+			// exit(EXIT_FAILURE);
 		}
 
 		if (!header_received)
@@ -171,19 +172,41 @@ int getresponse(int sockfd, char *filename, char **header)
 				{
 					htemp[hsize++] = '\n'; // put the \n in the header
 
-					content_len = parse_header(htemp, hsize);
+					content_len = parse_header(htemp, hsize, &status);
 
 					header_received = true;
 
-					if (filename == NULL)
+					switch (status)
+					{
+					case 200:
+						puts("200 OK");
+						break;
+
+					case 400:
+						puts("Error 400 Bad Request");
+						break;
+
+					case 403:
+						puts("Error 403 Forbidden");
+						break;
+
+					case 404:
+						puts("Error 404 Not Found");
+						break;
+
+					default:
+						printf("%d Unkown Error\n", status);
+					}
+
+					if (status != 200 || filename == NULL)
 					{
 						*header = htemp;
 						return hsize;
 					}
 
-					FILE *fptr = fopen(filename, "w");
-					fprintf(fptr, "%.*s", nchars - k - 1, buff + k + 1); // skipping the '\n' in buff[k]
-					total += nchars - k;
+					FILE *fptr = fopen(filename, "wb");
+					fwrite(buff + k + 1, sizeof(char), nchars - k - 1, fptr);
+					total += nchars - k - 1;
 					fclose(fptr);
 					break;
 				}
@@ -191,38 +214,24 @@ int getresponse(int sockfd, char *filename, char **header)
 		}
 		else
 		{
-			if (filename == NULL)
+			if (status != 200 || filename == NULL)
 				break;
 
-			FILE *fptr = fopen(filename, "a");
-			fprintf(fptr, "%.*s", nchars, buff);
+			FILE *fptr = fopen(filename, "ab");
+			fwrite(buff, sizeof(char), nchars, fptr);
 			total += nchars;
 			fclose(fptr);
 			if (total >= content_len)
 				break;
 		}
 	}
+	// htemp[hsize] = '\0';
 	*header = htemp;
 
 	if (filename != NULL)
 		openapp(filename, strlen(filename));
 
 	return hsize;
-}
-
-/*
-	Function to send message in chunks of CHUNKSIZE.
-*/
-void givemessage(int sockfd, char *msg, int msgsize)
-{
-	int k = 0;
-	while (k < msgsize)
-	{
-		char *bufptr = msg + k;
-		int size = (CHUNKSIZE < msgsize - k + 1) ? CHUNKSIZE : (msgsize - k + 1);
-		send(sockfd, bufptr, size, 0);
-		k += size;
-	}
 }
 
 void sendfile(int sockfd, char *filename)
@@ -233,7 +242,6 @@ void sendfile(int sockfd, char *filename)
 	while ((bytes = fread(p, 1, CHUNKSIZE, fptr)) > 0)
 	{
 		send(sockfd, p, bytes, 0);
-		// fwrite(p, 1, bytes, fp2);
 	}
 	fclose(fptr);
 }
@@ -255,13 +263,13 @@ int createsocket()
 
 int parseurl(char *url, int len, char **ip, char **path)
 {
-	char *st = url + 7;
+	char port[7] = {0};
+	char *st = strstr(url, "://") + 3;
 	char *end = st;
 
-	while (*end != '/')
+	while (*end != ':' && *end != '/')
 		end++;
 	char *t_ip = malloc((end - st + 1) * sizeof(char));
-
 	int k = 0;
 	while (st < end)
 	{
@@ -271,10 +279,24 @@ int parseurl(char *url, int len, char **ip, char **path)
 	}
 	t_ip[k] = '\0';
 
+	if (*end == ':')
+	{
+		while (*end != '/')
+			end++;
+		st++; // start from next to ':'
+		k = 0;
+		while (st < end)
+		{
+			port[k] = *st;
+			k++;
+			st++;
+		}
+		port[k] = '\0';
+	}
+
 	while (*end != ':' && end < url + len)
 		end++;
 	char *t_path = malloc((end - st + 1) * sizeof(char));
-
 	k = 0;
 	while (st < end)
 	{
@@ -288,9 +310,13 @@ int parseurl(char *url, int len, char **ip, char **path)
 	*path = t_path;
 
 	if (end == url + len)
-		return 80; // default port
-	end++;		   // otherwise *end == ':' so shift end once
-	char port[7];
+	{
+		if (port[0] == '\0')
+			return 80; // default port
+		else
+			return atoi(port);
+	}
+	end++; // otherwise *end == ':' so shift end once
 	k = 0;
 	while (end < url + len)
 	{
@@ -312,7 +338,7 @@ void DatePlusDays(struct tm *date, int days)
 	*date = *gmtime(&date_seconds);
 }
 
-int createheader(char *ip, char *path, char **header, char *sendfilename)
+int createheader(char *ip, int port, char *path, char **header, char *sendfilename)
 {
 
 	char doctype[20];
@@ -346,13 +372,14 @@ int createheader(char *ip, char *path, char **header, char *sendfilename)
 		}
 
 		sprintf(htemp, "GET %s HTTP/1.1\r\n"
-					   "Host: %s\r\n"
+					   "Host: %s:%d\r\n"
+					   "Date: %s\r\n"
 					   "Accept: %s\r\n"
 					   "Accept-Language: en-us\r\n"
 					   "If-Modified-Since: %s\r\n"
 					   "Connection: close\r\n"
 					   "\r\n",
-				path, ip, doctype, gtime);
+				path, ip, port, getDateNow(), doctype, gtime);
 	}
 
 	else
@@ -388,18 +415,26 @@ int createheader(char *ip, char *path, char **header, char *sendfilename)
 
 		fclose(fp);
 
+		// sendfilename can be a path, extract the filename
+		char *filename = strrchr(sendfilename, '/');
+		if (filename == NULL)
+			filename = sendfilename;
+		else
+			filename++;
+
 		sprintf(htemp, "PUT %s/%s HTTP/1.1\r\n"
-					   "Host: %s\r\n"
+					   "Host: %s:%d\r\n"
+					   "Date: %s\r\n"
 					   "Content-Type: %s\r\n"
 					   "Content-Length: %ld\r\n"
 					   "Content-Language: en-us\r\n"
 					   "Connection: close\r\n"
 					   "\r\n",
-				path, sendfilename, ip, doctype, length);
+				path, filename, ip, port, getDateNow(), doctype, length);
 	}
 
 	int len = strlen(htemp);
-	*header = malloc(len * sizeof(char));
+	*header = malloc((len + 1) * sizeof(char));
 	strcpy(*header, htemp);
 
 	return len;
@@ -424,7 +459,11 @@ int send_request(char *header, int headerlen, char *ip, int port, char *filename
 	}
 
 	// send the header
-	givemessage(sockfd, header, headerlen);
+	if (send(sockfd, header, headerlen, 0) < 0)
+	{
+		perror("send:error");
+		exit(EXIT_FAILURE);
+	}
 
 	if (filename != NULL)
 	{ // Send file for PUT request
@@ -443,9 +482,11 @@ int main()
 	size_t cmdsize;
 	while (1)
 	{
-		printf("\nMyOwnBrowser>");
+		printf("\nMyOwnBrowser> ");
 		line = NULL;
 		getline(&line, &cmdsize, stdin); // Err handle later
+		if (line == NULL)
+			continue;
 		sscanf(line, " %s %s %s", cmd, url, filename);
 
 		// char * token = strtok(cmd, " ");
@@ -463,10 +504,10 @@ int main()
 			char *serverpath;
 			int port = parseurl(url, strlen(url), &ip, &serverpath);
 			char *header;
-			int headerlen = createheader(ip, serverpath, &header, NULL);
+			int headerlen = createheader(ip, port, serverpath, &header, NULL);
 
 			// printf("%s  %d\n", ip, port);
-			// printf("%s", header);
+			printf("Request Sent:\n%s", header);
 
 			int sockfd = send_request(header, headerlen, ip, port, NULL);
 
@@ -479,18 +520,19 @@ int main()
 			char *response_header;
 			int res_header_len = getresponse(sockfd, filename, &response_header);
 
-			printf("%.*s", res_header_len, response_header);
+			printf("Response Received:\n%.*s", res_header_len, response_header);
 
-			free(response_header);
+			if (response_header)
+				free(response_header);
 			free(header);
 			free(serverpath);
 			free(ip);
+
+			close(sockfd);
 		}
 
 		else if (strcmp(cmd, "PUT") == 0)
 		{
-			// char *url = strtok(NULL, " ");
-			// char *filename = strtok(NULL, " ");
 			if (url == NULL || filename == NULL)
 			{
 				printf("Missing arguments");
@@ -502,10 +544,10 @@ int main()
 			char *serverpath;
 			int port = parseurl(url, strlen(url), &ip, &serverpath);
 			char *header;
-			int headerlen = createheader(ip, serverpath, &header, filename);
+			int headerlen = createheader(ip, port, serverpath, &header, filename);
 
 			// printf("%s  %d\n", ip, port);
-			// printf("%s", header);
+			printf("Request Sent:\n%s", header);
 
 			int sockfd = send_request(header, headerlen, ip, port, filename);
 
@@ -518,12 +560,15 @@ int main()
 			char *response_header;
 			int res_header_len = getresponse(sockfd, NULL, &response_header);
 
-			printf("%.*s", res_header_len, response_header);
+			printf("Response Received:\n%.*s", res_header_len, response_header);
 
-			free(response_header);
+			if (response_header)
+				free(response_header);
 			free(header);
 			free(serverpath);
 			free(ip);
+
+			close(sockfd);
 		}
 
 		else if (strcmp(cmd, "QUIT") == 0)
