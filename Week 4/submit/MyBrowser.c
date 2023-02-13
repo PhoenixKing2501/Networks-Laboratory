@@ -6,7 +6,7 @@
  * Member 2: Anamitra Mukhopadhyay (20CS30064)  *
  *                                              *
  ************************************************
-*/
+ */
 
 #define _GNU_SOURCE
 
@@ -488,22 +488,23 @@ int send_request(char *header, int headerlen, char *ip, int port, char *filename
 int main()
 {
 	char *line;
-	char cmd[10], url[100], filename[100];
 	size_t cmdsize;
 	while (1)
 	{
 		printf("\nMyOwnBrowser> ");
 		line = NULL;
 		getline(&line, &cmdsize, stdin); // Err handle later
-		if (line == NULL)
+		if (*line == '\0' ||
+			*line == '\n')
 			continue;
+		char cmd[1 << 10] = {0}, url[1 << 10] = {0}, filename[1 << 10] = {0};
 		sscanf(line, " %s %s %s", cmd, url, filename);
 
 		// char * token = strtok(cmd, " ");
 		if (strcmp(cmd, "GET") == 0)
 		{
 			// char *url = strtok(NULL, " ");
-			if (url == NULL)
+			if (*url == '\0')
 			{
 				printf("Missing arguments");
 				free(line);
@@ -540,10 +541,9 @@ int main()
 
 			close(sockfd);
 		}
-
 		else if (strcmp(cmd, "PUT") == 0)
 		{
-			if (url == NULL || filename == NULL)
+			if (*url == '\0' || *filename == '\0')
 			{
 				printf("Missing arguments");
 				free(line);
@@ -560,12 +560,6 @@ int main()
 			printf("Request Sent:\n%s", header);
 
 			int sockfd = send_request(header, headerlen, ip, port, filename);
-
-			char *filename = strrchr(serverpath, '/');
-			if (filename == NULL)
-				filename = serverpath;
-			else
-				filename++;
 
 			char *response_header;
 			int res_header_len = getresponse(sockfd, NULL, &response_header);
