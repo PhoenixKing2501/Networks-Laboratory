@@ -1,0 +1,7 @@
+GET /home/ubasu/IIT_Stuff/network/registry.pdf HTTP/1.1
+Host: www.ubasu.com
+Connection: close
+Accept: text/txt
+Accept-Language: en-us
+If-Modified-Since: Sat, 29 Oct 2011 19:43:31 GMT
+
