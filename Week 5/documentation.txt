@@ -1,0 +1,12 @@
+Data Structures:
+    mysocket.c:
+        struct _msg: Holds a complete message as a byte sequence. Used in 
+            Fields:
+                void * data: pointer to message content
+                size_t size: size of message
+        
+        struct _cqueue: A circular queue implementation. Used for Send_Message and Received_Message tables.
+            Fields:
+                struct _msg * cqueue[MSG_SIZE + 1]: Array to store the messages
+                int st: Index of the 'front' of the circular queue
+                int end: Index of the 'rear' of the circular queue

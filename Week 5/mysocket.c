@@ -154,6 +154,7 @@ MSG *recv_helper(int sockfd)
 	while (true)
 	{
 		ret = recv(sockfd, &sz, sizeof(sz), 0);
+
 		if (ret < 0)
 		{
 			perror("recv");
@@ -161,7 +162,7 @@ MSG *recv_helper(int sockfd)
 		}
 		else if (ret == 0)
 		{
-			break;
+			return NULL;
 		}
 
 		size_t torecv = sz;
@@ -180,7 +181,7 @@ MSG *recv_helper(int sockfd)
 			}
 			else if (ret == 0)
 			{
-				break;
+				return NULL;
 			}
 			torecv -= ret;
 			size += ret;
@@ -205,8 +206,10 @@ void *sendThreadFunc(void *arg)
 		pthread_mutex_lock(&sendMutex);
 		while (isempty(sendTable))
 		{
+			pthread_testcancel();
 			pthread_cond_wait(&sendCond1, &sendMutex);
 		}
+		pthread_testcancel();
 
 		MSG *msg = front(sendTable);
 		pop(sendTable);
@@ -229,17 +232,24 @@ void *recvThreadFunc(void *arg)
 
 	while (true)
 	{
+		MSG *msg = recv_helper(sockfd);
+
+		if (msg == NULL)
+		{
+			break;
+		}
+
 		pthread_mutex_lock(&recvMutex);
 		while (isfull(recvTable))
 		{
+			pthread_testcancel();
 			pthread_cond_wait(&recvCond1, &recvMutex);
 		}
-
-		MSG *msg = recv_helper(sockfd);
-		// puts("recv");
+		pthread_testcancel();
 
 		push(recvTable, msg);
 		deletemsg(msg);
+
 		pthread_mutex_unlock(&recvMutex);
 		pthread_cond_signal(&recvCond2);
 	}
@@ -295,14 +305,13 @@ int my_accept(int sockfd, __SOCKADDR_ARG addr, socklen_t *__restrict addrlen)
 
 int my_connect(int sockfd, __CONST_SOCKADDR_ARG addr, socklen_t addrlen)
 {
+	int ret = connect(sockfd, addr, addrlen);
 	init_connection(sockfd);
-	return connect(sockfd, addr, addrlen);
+	return ret;
 }
 
 ssize_t my_recv(int sockfd, void *buf, size_t len, int flags)
 {
-	// check if recvTable is empty
-
 	pthread_mutex_lock(&recvMutex);
 	while (isempty(recvTable))
 	{
@@ -336,8 +345,8 @@ ssize_t my_send(int sockfd, const void *buf, size_t len, int flags)
 	push(sendTable, &msg);
 	free(msg.data);
 
-	pthread_mutex_unlock(&sendMutex);
 	pthread_cond_signal(&sendCond1);
+	pthread_mutex_unlock(&sendMutex);
 
 	return len;
 }
@@ -349,6 +358,12 @@ int my_close(int fd)
 	pthread_cancel(recvThread);
 	pthread_join(sendThread, NULL);
 	pthread_join(recvThread, NULL);
+	pthread_mutex_destroy(&sendMutex);
+	pthread_mutex_destroy(&recvMutex);
+	pthread_cond_destroy(&sendCond1);
+	pthread_cond_destroy(&sendCond2);
+	pthread_cond_destroy(&recvCond1);
+	pthread_cond_destroy(&recvCond2);
 
 	freeCQ(sendTable);
 	freeCQ(recvTable);

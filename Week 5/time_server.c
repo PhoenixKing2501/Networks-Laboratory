@@ -1,6 +1,9 @@
 #include "mysocket.h"
+#include <signal.h>
 
 #define MSG_SIZE 100
+
+int sockfd;
 
 /*
 	Function to get the time and store in buf
@@ -13,7 +16,7 @@ void get_time(char *buf)
 
 int main()
 {
-	int sockfd, newsockfd;
+	int newsockfd;
 	socklen_t clilen;
 	struct sockaddr_in cli_addr, serv_addr;
 
@@ -27,7 +30,7 @@ int main()
 
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = INADDR_ANY;
-	serv_addr.sin_port = htons(20001);
+	serv_addr.sin_port = htons(20000);
 
 	if (my_bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
 	{
@@ -62,6 +65,24 @@ int main()
 		puts(buf);
 		my_send(newsockfd, buf, strlen(buf) + 1, 0);
 		puts("Time sent to client");
+
+		// Receive confirmation from client
+		puts("Receiving confirmation from client...");
+		my_recv(newsockfd, buf, MSG_SIZE, 0);
+		puts("Confirmation received from client:");
+		puts(buf);
+
+		char *str = NULL;
+		size_t len = 0;
+		FILE *fp = fopen("story.txt", "r");
+
+		getdelim(&str, &len, EOF, fp);
+
+		puts("Sending story to client...:");
+		my_send(newsockfd, str, strlen(str) + 1, 0);
+		puts("Story sent to client");
+
+		fclose(fp);
 
 		my_close(newsockfd);
 	}
