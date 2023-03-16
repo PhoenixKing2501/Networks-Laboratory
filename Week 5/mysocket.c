@@ -278,7 +278,7 @@ void init_connection(int sockfd)
 
 	initqueue(sendTable);
 	initqueue(recvTable);
-	puts("connection initialized");
+	// puts("connection initialized");
 }
 
 int my_socket(int domain, int type, int protocol)
