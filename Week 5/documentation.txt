@@ -10,3 +10,78 @@ Data Structures:
                 struct _msg * cqueue[MSG_SIZE + 1]: Array to store the messages
                 int st: Index of the 'front' of the circular queue
                 int end: Index of the 'rear' of the circular queue
+
+Functions:
+    mysocket.c:
+        deletemsg: Frees the allocated instance of data structure struct _msg *
+            parameters: struct _cqueue * Queue
+            return: void
+
+        initqueue: Initialize the fields of an instance of struct _cqueue *
+            parameters: struct _cqueue * Queue
+            return: void
+
+        isempty: Returns true if circular queue is empty
+            parameters: struct _cqueue * Queue
+            return: bool
+
+        isfull: Returns true if circular queue is full
+            parameters: struct _cqueue * Queue
+            return: bool
+
+        push: Push a message into the circular queue
+            parameters: struct _cqueue * Queue, struct _msg * message
+            return: void
+
+        pop: Pop a message from the circular queue
+            parameters: struct _cqueue * Queue
+            return: void
+
+        front: Returns the message at the front of the circular queue
+            parameters: struct _cqueue * Queue
+            return: struct _msg *
+
+        freeCQ: Frees the allocated instance of struct _cqueue *
+            parameters: struct _cqueue * Queue
+            return: void
+
+        send_helper: Sends a message through a socket. Ensures the message is sent by a single call of this function.
+            parameters: int sockfd, struct _msg * message
+            return: void
+
+        recv_helper: Receives a message through a socket. Ensures the full message is received by a single call of this function.
+            parameters: int sockfd
+            return: struct _msg *
+
+        sendThreadFunc: The function used by the S (sending) thread. Internally calls send_helper function.
+            parameters: void *arg
+            return: void *
+
+        recvThreadFunc: The function used by the R (receiving) thread. Internally calls the recv_helper function.
+            parameters: void *arg
+            return: void *
+
+        init_connection: Creates the R and S threads and initializes the mutex locks and conditions. Also allocates the Send_Message and Receive_Message tables.
+            parameters: int sockfd
+            return: void
+
+    mysocket.h:
+        my_socket:
+
+        my_connect:
+
+        my_accept:
+
+        my_bind:
+
+        my_listen:
+
+        my_send:
+
+        my_recv:
+
+        my_close:
+
+description of my_send:
+
+description of my_recv:
