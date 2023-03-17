@@ -13,75 +13,100 @@ Data Structures:
 
 Functions:
     mysocket.c:
-        deletemsg: Frees the allocated instance of data structure struct _msg *
+        deletemsg(): Frees the allocated instance of data structure struct _msg *
             parameters: struct _cqueue * Queue
             return: void
 
-        initqueue: Initialize the fields of an instance of struct _cqueue *
+        initqueue(): Initialize the fields of an instance of struct _cqueue *
             parameters: struct _cqueue * Queue
             return: void
 
-        isempty: Returns true if circular queue is empty
+        isempty(): Returns true if circular queue is empty
             parameters: struct _cqueue * Queue
             return: bool
 
-        isfull: Returns true if circular queue is full
+        isfull(): Returns true if circular queue is full
             parameters: struct _cqueue * Queue
             return: bool
 
-        push: Push a message into the circular queue
+        push(): Push a message into the circular queue
             parameters: struct _cqueue * Queue, struct _msg * message
             return: void
 
-        pop: Pop a message from the circular queue
+        pop(): Pop a message from the circular queue
             parameters: struct _cqueue * Queue
             return: void
 
-        front: Returns the message at the front of the circular queue
+        front(): Returns the message at the front of the circular queue
             parameters: struct _cqueue * Queue
             return: struct _msg *
 
-        freeCQ: Frees the allocated instance of struct _cqueue *
+        freeCQ(): Frees the allocated instance of struct _cqueue *
             parameters: struct _cqueue * Queue
             return: void
 
-        send_helper: Sends a message through a socket. Ensures the message is sent by a single call of this function.
+        send_helper(): Sends a message through a socket. Ensures the message is sent by a single call of this function.
             parameters: int sockfd, struct _msg * message
             return: void
 
-        recv_helper: Receives a message through a socket. Ensures the full message is received by a single call of this function.
+        recv_helper(): Receives a message through a socket. Ensures the full message is received by a single call of this function.
             parameters: int sockfd
             return: struct _msg *
 
-        sendThreadFunc: The function used by the S (sending) thread. Internally calls send_helper function.
+        sendThreadFunc(): The function used by the S (sending) thread. Internally calls send_helper function.
             parameters: void *arg
             return: void *
 
-        recvThreadFunc: The function used by the R (receiving) thread. Internally calls the recv_helper function.
+        recvThreadFunc(): The function used by the R (receiving) thread. Internally calls the recv_helper function.
             parameters: void *arg
             return: void *
 
-        init_connection: Creates the R and S threads and initializes the mutex locks and conditions. Also allocates the Send_Message and Receive_Message tables.
+        init_connection(): Creates the R and S threads and initializes the mutex locks and conditional variables. Also allocates the Send_Message and Receive_Message tables.
             parameters: int sockfd
             return: void
 
     mysocket.h:
-        my_socket:
+        my_socket(): Wrapper over socket()
+            parameters: same as socket()
+            return: same as socket()
 
-        my_connect:
+        my_connect(): Wrapper over connect(). Also calls the init_connection() to create the threads and tables.
+            parameters: same as connect()
+            return: same as connect()
 
-        my_accept:
+        my_accept(): Wrapper over accept(). Also calls the init_connection() to create the threads and tables.
+            parameters: same as accept()
+            return: same as accept()
 
-        my_bind:
+        my_bind(): Wrapper over bind()
+            parameters: same as bind()
+            return: same as bind()
 
-        my_listen:
+        my_listen(): Wrapper over listen()
+            parameters: same as listen()
+            return: same as listen()
 
-        my_send:
+        my_send(): Puts the message in the Send_Message table if the table has a free entry and returns immediately. If the table does not have a free entry, it gets blocked until an entry is free
+            parameters: same as send()
+            return: same as send()
 
-        my_recv:
+        my_recv(): Checks if there is any message to receive in the Received_Message table. If yes, the message is returned, and the entry is deleted from the table. If not, the my_recv call blocks until a message is received
+            parameters: same as recv()
+            return: same as recv()
 
-        my_close:
+        my_close(): Wrapper over close(). Also destroys the threads and the tables.
+            parameters: same as close()
+            return: same as close()
 
-description of my_send:
+Workflow of sending a message:
+    my_send() locks the mutex lock for the Send_Message table. If the table is full, it waits on the conditional variable for the table to be free. If the table is not full, it pushes the message into the table and signals the conditional variable for the table to be free. It then unlocks the mutex lock for the Send_Message table. 
+    Now the S (send) thread locks the mutex lock for the Send_Message table and checks if the table is empty. If the table is empty, it waits on the conditional variable for the table to be free. If the table is not empty, it pops the message from the table and sends it through the socket. It then unlocks the mutex lock for the Send_Message table. It then signals the conditional variable for the table to be free.
+    To send the message, the thread calls the send_helper() function. This function ensures the message orientedness to my_send() function by guranteeing that the message is sent by a single call of this function. It sends the message in chunks of max size CHUNK. It sends the size of the chunk first, and then the chunk itself. It sends the size of the chunk as a 1 byte integer. And it continues to send the chunks until the entire message is sent. 
 
-description of my_recv:
+Workflow of receiving a message:
+    my_recv() locks the mutex lock for the Received_Message table. If the table is empty, it waits on the conditional variable for the table to be free. If the table is not empty, it pops the message from the table and returns it to the user. It then unlocks the mutex lock for the Received_Message table. It then signals the conditional variable for the table to be free.
+    Now the R (receive) thread locks the mutex lock for the Received_Message table and checks if the table is full. If the table is full, it waits on the conditional variable for the table to be free. If the table is not full, receives a message through the socket. Then it pushes the message into the table and signals the conditional variable for the table to be free. It then unlocks the mutex lock for the Received_Message table.
+    To receive the message, the thread calls the recv_helper() function. This function ensures the message orientedness to my_recv() function by guranteeing that the full message is received by a single call of this function. It receives the message in chunks of max size CHUNK. It receives the size of the chunk first, and then the chunk itself. It receives the size of the chunk as a 1 byte integer. And it continues to receive the chunks until the entire message is received.
+
+Reason to create threads and tables in connect() and accept():
+    The init_connection() function is called in my_connect() and my_accept(). This is because the threads and tables are created only when a connection is established. The threads and tables are destroyed when the connection is closed. This is done to ensure that messages can be sent/received though the socket descriptor and the threads and tables are not created unnecessarily. (So we avoided creating threads and tables in my_socket() function. In that case, in the server side the threads and tables will be created, the S and R threads will be waiting but on which socket? The client has not connected yet. So we do not know the socket descriptor to send/receive the messages through. Similarly, in the client side, a socket is eligble to send/receive only after connect() succeeds.) This also helps in making the server iterative. 
