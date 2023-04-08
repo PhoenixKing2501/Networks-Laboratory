@@ -16,7 +16,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#define PING_PKT_S 64
+#define PING_PKT_S (1 << 7)
+#define PKT_NUM (1 << 3)
 
 struct ping_pkt
 {
@@ -66,17 +67,16 @@ unsigned short checksum(void *b, int len)
 void print_icmph(struct icmphdr *icmph)
 {
 	printf("ICMP Header: ");
-	printf("Type: %d, Code: %d, Checksum: %d, ID: %d, Sequence: %d", 
-		icmph->type, icmph->code, icmph->checksum, icmph->un.echo.id, icmph->un.echo.sequence);
+	printf("Type: %2d, Code: %d, Checksum: %d, ID: %d, Sequence: %d",
+		   icmph->type, icmph->code, icmph->checksum, icmph->un.echo.id, icmph->un.echo.sequence);
 	printf("\n");
-	
 }
 
 void print_iph(struct iphdr *iph)
 {
 	printf("IP Header: ");
-	printf("Version: %d, Header Length: %d, Type of Service: %d, Total Length: %d, ID: %d, Fragment Offset: %d, Time to Live: %d, Protocol: %d, Checksum: %d, Source IP: %s, Destination IP: %s", 
-		iph->version, iph->ihl, iph->tos, iph->tot_len, iph->id, iph->frag_off, iph->ttl, iph->protocol, iph->check, inet_ntoa(*(struct in_addr *)&iph->saddr), inet_ntoa(*(struct in_addr *)&iph->daddr));
+	printf("Version: %d, Header Length: %d, Type of Service: %d, Total Length: %d, ID: %d, Fragment Offset: %d, Time to Live: %d, Protocol: %d, Checksum: %d, Source IP: %s, Destination IP: %s",
+		   iph->version, iph->ihl, iph->tos, iph->tot_len, iph->id, iph->frag_off, iph->ttl, iph->protocol, iph->check, inet_ntoa(*(struct in_addr *)&iph->saddr), inet_ntoa(*(struct in_addr *)&iph->daddr));
 	printf("\n");
 }
 
@@ -95,6 +95,36 @@ void print_iph(struct iphdr *iph)
 //     iph->ip_src.s_addr = inet_addr(ipadd);
 //     iph->ip_dst.s_addr = inet_addr(ipadd);
 // }
+
+// generate random msg to send
+void generate_msg(char *msg, int size)
+{
+	for (int i = 0; i < size; i++)
+	{
+		msg[i] = 'a' + (rand() % 26);
+	}
+}
+
+struct _bl
+{
+	double bandwidth, latency;
+} calculate_bl(double delays[], int pkt_size[], int num_pkts)
+{
+	double bandwidth = 0, latency = 0;
+
+	for (int i = 0, j = 1; j < num_pkts; i++, j++)
+	{
+		bandwidth += (pkt_size[j] - pkt_size[i]) / (delays[j] - delays[i]);
+		latency += (pkt_size[j] * delays[i] -
+					pkt_size[i] * delays[j]) /
+				   (pkt_size[j] - pkt_size[i]);
+	}
+
+	bandwidth /= num_pkts - 1;
+	latency /= num_pkts - 1;
+
+	return (struct _bl){.bandwidth = bandwidth, .latency = latency};
+}
 
 int main(int argc, char *argv[])
 {
@@ -135,97 +165,132 @@ int main(int argc, char *argv[])
 
 	bool flag = false;
 
+	double old_delays[PKT_NUM] = {0};
+	int pkt_size[PKT_NUM] = {0};
 	int cnt = 30;
+
+	for (int i = 0; i < PKT_NUM; ++i)
+	{
+		pkt_size[i] = (i + 1) * (PING_PKT_S / PKT_NUM);
+	}
+
 	while (cnt--)
 	{
 		// Set the socket options
 		setsockopt(sockfd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
 		printf("--------------HOP %2d--------------\n", ttl);
 
-		for (int i = 0; i < num_probes; i++)
+		double delays[PKT_NUM] = {0};
+
+		for (int a = 0; a < PKT_NUM; a++)
 		{
-			struct ping_pkt pckt = {0};
-			// Fill in the icmp header
-			pckt.hdr.type = ICMP_ECHO;
-			pckt.hdr.un.echo.id = getpid();
+			// int pckt_size = (a + 1) * (PING_PKT_S / PKT_NUM);
+			// double delay_min = 1e9;
+			double delay_min = 0;
 
-			// Insert the data
-			strcpy(pckt.msg, "Hello");
-
-			// Calculate the checksum
-			pckt.hdr.un.echo.sequence = i;
-			pckt.hdr.checksum = 0;
-			pckt.hdr.checksum = checksum(&pckt, sizeof(pckt));
-
-			// Send the packet
-			clock_gettime(CLOCK_MONOTONIC, &time_start);
-			if (sendto(sockfd, &pckt, sizeof(pckt), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) <= 0)
+			for (int i = 0; i < num_probes; i++)
 			{
-				perror("sendto");
-				exit(1);
-			}
-			printf("Packet sent!\n");
-			print_icmph(&pckt.hdr);
+				printf("Packet Size: %d bytes, Probe: %d\n", pkt_size[a], i + 1);
+				struct ping_pkt pckt = {0};
+				// Fill in the icmp header
+				pckt.hdr.type = ICMP_ECHO;
+				pckt.hdr.un.echo.id = getpid();
 
+				// Insert the data
+				generate_msg(pckt.msg, pkt_size[a] - sizeof(struct icmphdr));
 
-			// Receive the packet
-			int addr_len = sizeof(r_addr);
+				// Calculate the checksum
+				pckt.hdr.un.echo.sequence = i;
+				pckt.hdr.checksum = 0;
+				pckt.hdr.checksum = checksum(&pckt, pkt_size[a]);
 
-
-			char recvbuf[1024] = {0};
-			ssize_t ret = 0;
-			if (ret = recvfrom(sockfd, &recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&r_addr, &addr_len) <= 0)
-			{
-				if (errno == EAGAIN || errno == EWOULDBLOCK)
+				// Send the packet
+				clock_gettime(CLOCK_MONOTONIC, &time_start);
+				if (sendto(sockfd, &pckt, pkt_size[a], 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) <= 0)
 				{
-					printf("Request timed out.\n");
-					continue;
+					perror("sendto");
+					exit(1);
+				}
+				printf("Packet sent!\n");
+				print_icmph(&pckt.hdr);
+
+				// Receive the packet
+				int addr_len = sizeof(r_addr);
+
+				char recvbuf[1024] = {0};
+				ssize_t ret = 0;
+				if (ret = recvfrom(sockfd, &recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&r_addr, &addr_len) <= 0)
+				{
+					if (errno == EAGAIN || errno == EWOULDBLOCK)
+					{
+						printf("Request timed out.\n");
+						continue;
+					}
+					else
+					{
+						perror("recvfrom");
+						exit(1);
+					}
 				}
 				else
 				{
-					perror("recvfrom");
-					exit(1);
-				}
-			}
-			else
-			{
-				clock_gettime(CLOCK_MONOTONIC, &time_end);
-				
-				char *rcv = strdup(inet_ntoa(r_addr.sin_addr));
-				char *dest = strdup(inet_ntoa(dest_addr.sin_addr));
-				printf("Packet received from %s\n", inet_ntoa(r_addr.sin_addr));
-				struct icmphdr *r_icmph = (struct icmphdr *)recvbuf;
-				print_icmph(r_icmph);
+					clock_gettime(CLOCK_MONOTONIC, &time_end);
 
-				// Check if the code is time exceeded or echo reply
-				if (r_icmph->type != ICMP_ECHOREPLY && r_icmph->type != ICMP_TIME_EXCEEDED)
-				{
-					// Check if there is any data and print the ip header
-					if(ret > sizeof(struct icmphdr))
+					char *rcv = strdup(inet_ntoa(r_addr.sin_addr));
+					char *dest = strdup(inet_ntoa(dest_addr.sin_addr));
+					printf("Packet received from %s\n", inet_ntoa(r_addr.sin_addr));
+					struct icmphdr *r_icmph = (struct icmphdr *)recvbuf;
+					print_icmph(r_icmph);
+
+					// Check if the code is time exceeded or echo reply
+					if (r_icmph->type != ICMP_ECHOREPLY && r_icmph->type != ICMP_TIME_EXCEEDED)
 					{
-						struct iphdr *r_iph = (struct iphdr *)(recvbuf + sizeof(struct icmphdr));
-						print_iph(r_iph);
+						// Check if there is any data and print the ip header
+						if (ret > sizeof(struct icmphdr))
+						{
+							struct iphdr *r_iph = (struct iphdr *)(recvbuf + sizeof(struct icmphdr));
+							print_iph(r_iph);
+						}
 					}
+
+					double timeElapsed = ((double)(time_end.tv_nsec - time_start.tv_nsec)) / 1000000.0;
+					double rtt_msec = (time_end.tv_sec - time_start.tv_sec) * 1000.0 + timeElapsed;
+					// delay_min = delay_min < (rtt_msec / 2) ? delay_min : (rtt_msec / 2);
+					delay_min += (rtt_msec / 2);
+
+					// printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n", 56 + 8, inet_ntoa(r_addr.sin_addr), i, ttl, rtt_msec);
+					printf("RTT: %.3f msec\n", rtt_msec);
+
+					if (strcmp(rcv, dest) == 0)
+					{
+						flag = true;
+					}
+
+					free(rcv);
+					free(dest);
 				}
-				
 
-				double timeElapsed = ((double)(time_end.tv_nsec - time_start.tv_nsec)) / 1000000.0;
-				double rtt_msec = (time_end.tv_sec - time_start.tv_sec) * 1000.0 + timeElapsed;
+				usleep(time_diff * 1e6);
+				fflush(stdout);
+			} // end of for loop
 
-				// printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n", 56 + 8, inet_ntoa(r_addr.sin_addr), i, ttl, rtt_msec);
-				printf("RTT: %.3f msec\n", rtt_msec);
+			delays[a] = delay_min / num_probes;
+		}
 
-				if (strcmp(rcv, dest) == 0)
-				{
-					flag = true;
-				}
+		double diff[PKT_NUM] = {0};
+		for (int i = 0; i < PKT_NUM; i++)
+		{
+			diff[i] = delays[i] - old_delays[i];
+			old_delays[i] = delays[i];
 
-				free(rcv);
-				free(dest);
-			}
+			fprintf(stderr, "Hop: %3d, Packet Size: %4i, diff[%d] = %lf\n",
+					ttl, pkt_size[i], i, diff[i]);
+		}
 
-			usleep(time_diff * 1e6);
-		} // end of for loop
+		struct _bl res = calculate_bl(diff, pkt_size, PKT_NUM);
+
+		printf("Bandwidth: %.3f Kbps\n", 8 * res.bandwidth);
+		printf("Latency: %.3f msec\n", res.latency);
 
 		printf("\n");
 
@@ -236,6 +301,8 @@ int main(int argc, char *argv[])
 
 		ttl++;
 	}
+
+	puts("\n\n------------------Done------------------------\n");
 
 	return 0;
 }
