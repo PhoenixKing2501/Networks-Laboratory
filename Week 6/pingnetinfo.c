@@ -1,3 +1,12 @@
+/*
+ ************************************************
+ *                                              *
+ * Group   : 42                                 *
+ * Member 1: Utsav Basu (20CS30057)             *
+ * Member 2: Anamitra Mukhopadhyay (20CS30064)  *
+ *                                              *
+ ************************************************
+ */
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
