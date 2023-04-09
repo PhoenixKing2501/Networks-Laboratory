@@ -1,4 +1,3 @@
-// a program that will take a site address and find the route and estimate the latency and bandwidth of each link in the path
 
 #define _GNU_SOURCE
 #include <arpa/inet.h>
@@ -16,24 +15,18 @@
 #include <time.h>
 #include <unistd.h>
 
-#define PING_PKT_S (1 << 7)
+#define MAX_PKT_SIZE (1 << 7)
 #define PKT_NUM (1 << 3)
 
-struct ping_pkt
+typedef struct _mypkt
 {
 	struct icmphdr hdr;
-	char msg[PING_PKT_S - sizeof(struct icmphdr)];
-};
+	char msg[MAX_PKT_SIZE - sizeof(struct icmphdr)];
+} mypkt;
 
 // Function to set the ip address from the link
 void set_dest(struct sockaddr_in *dest_addr, char *link)
 {
-	// Check if the link is an ip address
-	// if (inet_addr(link) != -1)
-	// {
-	//     return
-	// }
-
 	// Get the hostent structure
 	struct hostent *host = gethostbyname(link);
 	if (host == NULL)
@@ -80,22 +73,6 @@ void print_iph(struct iphdr *iph)
 	printf("\n");
 }
 
-// void fill_ip_header(struct ip *iph, char *ipadd)
-// {
-//     // Fill in the ip header
-//     iph->ip_hl = 5;
-//     iph->ip_v = 4;
-//     iph->ip_tos = 0;
-//     iph->ip_len = sizeof(struct ip) + sizeof(struct icmp);
-//     iph->ip_id = htons(54321);
-//     iph->ip_off = 0;
-//     iph->ip_ttl = 255;
-//     iph->ip_p = IPPROTO_ICMP;
-//     iph->ip_sum = 0;
-//     iph->ip_src.s_addr = inet_addr(ipadd);
-//     iph->ip_dst.s_addr = inet_addr(ipadd);
-// }
-
 // generate random msg to send
 void generate_msg(char *msg, int size)
 {
@@ -105,6 +82,20 @@ void generate_msg(char *msg, int size)
 	}
 }
 
+/*
+ * Function to calculate the bandwidth and latency
+ * @param delays: array of delays
+ * @param pkt_size: array of packet sizes
+ * @param num_pkts: number of packets
+ * @return: struct _bl containing bandwidth and latency
+ * 
+ * D = P/B + L, delay = packet_size/bandwidth + latency
+ * For two packet sizes P1 and P2, and two delays D1 and D2, we have
+ * P1/B + L = D1
+ * P2/B + L = D2
+ * Solving, B = (P2 - P1) / (D2 - D1) and L = (P2 * D1 - P1 * D2) / (P2 - P1)
+ * We take the average of all the values of B and L
+*/
 struct _bl
 {
 	double bandwidth, latency;
@@ -113,11 +104,13 @@ struct _bl
 	double bandwidth = 0, latency = 0;
 
 	for (int i = 0, j = 1; j < num_pkts; i++, j++)
-	{
-		bandwidth += (pkt_size[j] - pkt_size[i]) / (delays[j] - delays[i]);
-		latency += (pkt_size[j] * delays[i] -
+	{	
+		double temp_b = (pkt_size[j] - pkt_size[i]) / (delays[j] - delays[i]);
+		bandwidth += temp_b > 0 ? temp_b : -temp_b;
+		double temp_l = (pkt_size[j] * delays[i] -
 					pkt_size[i] * delays[j]) /
 				   (pkt_size[j] - pkt_size[i]);
+		latency += temp_l > 0 ? temp_l : -temp_l;
 	}
 
 	bandwidth /= num_pkts - 1;
@@ -152,10 +145,9 @@ int main(int argc, char *argv[])
 	struct sockaddr_in dest_addr = {0}, r_addr;
 	set_dest(&dest_addr, argv[1]);
 
-	// Create the packet to be sent
 	struct timeval tv_out;
-	tv_out.tv_sec = 1;	// 1 sec timeout
-	tv_out.tv_usec = 0; // Not init'ing this can cause strange errors
+	tv_out.tv_sec = 1;
+	tv_out.tv_usec = 0; 
 
 	int ttl = 1;
 	struct timespec time_start, time_end;
@@ -171,27 +163,76 @@ int main(int argc, char *argv[])
 
 	for (int i = 0; i < PKT_NUM; ++i)
 	{
-		pkt_size[i] = (i + 1) * (PING_PKT_S / PKT_NUM);
+		pkt_size[i] = (i + 1) * (MAX_PKT_SIZE / PKT_NUM);
 	}
 
 	while (cnt--)
 	{
-		// Set the socket options
+		// Set the ttl field
 		setsockopt(sockfd, IPPROTO_IP, IP_TTL, &ttl, sizeof(ttl));
 		printf("--------------HOP %2d--------------\n", ttl);
+
+		printf("Sending 5 packets with no data\n");
+		for(int a = 0; a < 5; ++a)
+		{
+			mypkt pckt = {0};
+			// Fill in the icmp header
+			pckt.hdr.type = ICMP_ECHO;
+			pckt.hdr.un.echo.id = getpid();
+
+			// Calculate the checksum
+			pckt.hdr.un.echo.sequence = a;
+			pckt.hdr.checksum = 0;
+			pckt.hdr.checksum = checksum(&pckt, sizeof(struct icmphdr));
+
+			// Send the packet
+			clock_gettime(CLOCK_MONOTONIC, &time_start);
+			if (sendto(sockfd, &pckt, pkt_size[a], 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) <= 0)
+			{
+				perror("sendto");
+				exit(1);
+			}
+
+			// Receive the packet
+			int addr_len = sizeof(r_addr);
+
+			char recvbuf[1024] = {0};
+			ssize_t ret = 0;
+			if (ret = recvfrom(sockfd, &recvbuf, sizeof(recvbuf), 0, (struct sockaddr *)&r_addr, &addr_len) <= 0)
+			{
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+				{
+					printf("*\t");
+					continue;
+				}
+				else
+				{
+					perror("recvfrom");
+					exit(1);
+				}
+			}
+			else
+			{
+				clock_gettime(CLOCK_MONOTONIC, &time_end);
+
+				double time_nsec = ((double)(time_end.tv_nsec - time_start.tv_nsec)) / 1000000.0;
+				double rtt_msec = (time_end.tv_sec - time_start.tv_sec) * 1000.0 + time_nsec;
+
+				printf("%.3f msec\t", rtt_msec);
+			}
+		}
+		printf("\n");
 
 		double delays[PKT_NUM] = {0};
 
 		for (int a = 0; a < PKT_NUM; a++)
 		{
-			// int pckt_size = (a + 1) * (PING_PKT_S / PKT_NUM);
-			// double delay_min = 1e9;
-			double delay_min = 0;
+			double delay_mean = 0;
 
 			for (int i = 0; i < num_probes; i++)
 			{
 				printf("Packet Size: %d bytes, Probe: %d\n", pkt_size[a], i + 1);
-				struct ping_pkt pckt = {0};
+				mypkt pckt = {0};
 				// Fill in the icmp header
 				pckt.hdr.type = ICMP_ECHO;
 				pckt.hdr.un.echo.id = getpid();
@@ -253,12 +294,11 @@ int main(int argc, char *argv[])
 						}
 					}
 
-					double timeElapsed = ((double)(time_end.tv_nsec - time_start.tv_nsec)) / 1000000.0;
-					double rtt_msec = (time_end.tv_sec - time_start.tv_sec) * 1000.0 + timeElapsed;
-					// delay_min = delay_min < (rtt_msec / 2) ? delay_min : (rtt_msec / 2);
-					delay_min += (rtt_msec / 2);
+					double time_nsec = ((double)(time_end.tv_nsec - time_start.tv_nsec)) / 1000000.0;
+					double rtt_msec = (time_end.tv_sec - time_start.tv_sec) * 1000.0 + time_nsec;
 
-					// printf("%d bytes from %s: icmp_seq=%d ttl=%d time=%.3f ms\n", 56 + 8, inet_ntoa(r_addr.sin_addr), i, ttl, rtt_msec);
+					delay_mean += (rtt_msec / 2);
+
 					printf("RTT: %.3f msec\n", rtt_msec);
 
 					if (strcmp(rcv, dest) == 0)
@@ -272,9 +312,9 @@ int main(int argc, char *argv[])
 
 				usleep(time_diff * 1e6);
 				fflush(stdout);
-			} // end of for loop
+			}
 
-			delays[a] = delay_min / num_probes;
+			delays[a] = delay_mean / num_probes;
 		}
 
 		double diff[PKT_NUM] = {0};
@@ -283,8 +323,8 @@ int main(int argc, char *argv[])
 			diff[i] = delays[i] - old_delays[i];
 			old_delays[i] = delays[i];
 
-			fprintf(stderr, "Hop: %3d, Packet Size: %4i, diff[%d] = %lf\n",
-					ttl, pkt_size[i], i, diff[i]);
+			// fprintf(stderr, "Hop: %3d, Packet Size: %4i, diff[%d] = %lf\n",
+			// 		ttl, pkt_size[i], i, diff[i]);
 		}
 
 		struct _bl res = calculate_bl(diff, pkt_size, PKT_NUM);
@@ -302,7 +342,7 @@ int main(int argc, char *argv[])
 		ttl++;
 	}
 
-	puts("\n\n------------------Done------------------------\n");
+	puts("\n\n------------------Done------------------------");
 
 	return 0;
 }
