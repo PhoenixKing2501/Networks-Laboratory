@@ -100,7 +100,9 @@ int main(int argc, char *argv[])
 {
 	if (argc < 4)
 	{
-		printf("Usage: %s <link/ip address> <number of probes per link> <time difference between any two probes>", argv[0]);
+		printf("Usage: %s <link/ip address> "
+			   "<number of probes per link> "
+			   "<time difference between any two probes>", argv[0]);
 		exit(1);
 	}
 
